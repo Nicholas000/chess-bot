@@ -2,3 +2,5 @@ authlib
 python-dotenv
 flask
 requests
+ndjson
+python-chess

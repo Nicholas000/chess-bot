@@ -1,59 +1,77 @@
-# Authorization code from https://github.com/lakinwecker/lichess-oauth-flask/blob/master/README.md 
 import os
+import webbrowser
 
-from flask import Flask, jsonify, render_template
-from flask import url_for
-
+import berserk
 from dotenv import load_dotenv
+from flask import Flask, jsonify, redirect, render_template, url_for
+
 load_dotenv()
 
-import requests
+# import ndjson
+# import requests
+# from authlib.integrations.flask_client import OAuth
 
-from authlib.integrations.flask_client import OAuth
+from src.chess_bot import ChessBot
 
 LICHESS_HOST = os.getenv("LICHESS_HOST", "https://lichess.org")
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY")
-app.config['LICHESS_CLIENT_ID'] =  os.getenv("LICHESS_CLIENT_ID")
-app.config['LICHESS_AUTHORIZE_URL'] = f"{LICHESS_HOST}/oauth"
-app.config['LICHESS_ACCESS_TOKEN_URL'] = f"{LICHESS_HOST}/api/token"
 
-oauth = OAuth(app)
-oauth.register('lichess', client_kwargs={"code_challenge_method": "S256"})
+session = berserk.TokenSession(app.secret_key)
+client = berserk.Client(session=session)
 
-@app.route('/')
-def login():
-    redirect_uri = url_for("authorize", _external=True)
-    """
-    If you need to append scopes to your requests, add the `scope=...` named argument
-    to the `.authorize_redirect()` method. For admissible values refer to https://lichess.org/api#section/Authentication. 
-    Example with scopes for allowing the app to read the user's email address:
-    `return oauth.lichess.authorize_redirect(redirect_uri, scope="email:read")`
-    """
-    return oauth.lichess.authorize_redirect(redirect_uri, scope="bot:play")
 
-@app.route('/authorize')
-def authorize():
-    token = oauth.lichess.authorize_access_token()
-    bearer = token['access_token']
-    headers = {'Authorization': f'Bearer {bearer}'}
-    response = requests.get(f"{LICHESS_HOST}/api/account", headers=headers)
-    # return jsonify(**response.json())
+@app.route("/")
+def root():
+    return render_template("index.html")
 
-    # Redirect to home page after authorization
-    redirect_uri = url_for("home")
-    return app.redirect(redirect_uri)
 
-@app.route('/home')
-def home():
-    return render_template('index.html')
-    # return "Home Page!"
+# @app.route("/home")
+# def home():
+#     return render_template("index.html")
+#     # return "Home Page!"
 
-@app.route('/start_game', methods=['POST'])
-def start_game():
-    # Code to handle the button click (e.g., process data, redirect)
-    return "Starting Game!" # Or redirect using redirect(url_for('some_other_route'))
 
-if __name__ == '__main__':
+@app.route("/start_stream", methods=["POST"])
+def start_stream():
+    events = client.bots.stream_incoming_events()
+    for i in events:
+        print(i)
+    return [i for i in events]
+
+
+# TODO: Support playing multiple games at once although should limit max games to avoid reaching API limit
+@app.route("/play_ai", methods=["POST"])
+def play_ai():
+    # TODO: Possibly implement settings controls on app webpage
+    level = 5
+    clock_limit = 3600
+    clock_increment = 30
+    color = None
+    response = client.challenges.create_ai(
+        level=level,
+        clock_limit=clock_limit,
+        clock_increment=clock_increment,
+        variant="standard",
+        color=color,
+    )
+    fullId = response["fullId"]
+    url = f"{LICHESS_HOST}/{fullId}"
+    webbrowser.open(url)
+
+    ChessBot(response, client)
+
+    return redirect("/")
+
+
+@app.route("/get_opponent", methods=["GET"])
+def get_opponent():
+    bots = client.bots.get_online_bots(1)
+    # for bot in bots:
+    #     print(bot["id"])
+    return [b for b in bots][0]
+
+
+if __name__ == "__main__":
     app.run()

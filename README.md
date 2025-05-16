@@ -12,25 +12,27 @@ Step 2: Add .env file
 add the `.env` file with the following contents:
 
 ```
-LICHESS_CLIENT_ID="lichess-oauth-flask"
-SECRET_KEY="{ secure random key for flask sessions }"
+SECRET_KEY="{ lichess API key }"
 ```
+Minimum API key access privileges:
+- bot:play
+- challenge:write
 
 Step 3: Run the App
 -------------------
 run the app:
 ```
-python src\app\app.py
+python -m src.app.app
 ```
 
 Step 4: Load the URL
 --------------------
 load this url in your browser: http://127.0.0.1:5000/
 
-Step 5: Authorize
+Step 5: Start Game
 -----------
-hit the "Authorize" button on the webpage that pops up
+hit the "Play AI" button to start a game with the Stockfish AI. It will automatically open up the game in a separate tab
 
-Step 6: UI
+<!-- Step 6: UI
 --------------
-interact with the UI to start game, view games, etc. **(This functionality needs to be added)**
+interact with the UI to start game, view games, etc. **(This functionality needs to be added)** -->
