@@ -48,7 +48,7 @@ def play_ai():
     level = 5
     clock_limit = 3600
     clock_increment = 30
-    color = None
+    color = "white"
     response = client.challenges.create_ai(
         level=level,
         clock_limit=clock_limit,

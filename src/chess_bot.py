@@ -1,10 +1,14 @@
 # TODO: Add code for bot that actually makes intelligent moves
+import json
 import random
 import threading
+import time
+from queue import Queue
 from typing import Any, Dict
 
 import berserk
 import chess
+import pandas as pd
 
 from src.move_generator import get_moves_from_fen
 
@@ -19,7 +23,9 @@ class ChessBot:
         self.fen = response["fen"]
         self.client = client
         self.bot_id = self.client.account.get()["id"]
-        self.board = chess.Board(fen=self.fen)
+        self.board = chess.Board(
+            fen=self.fen
+        )  # Keep an internal representation of the board
 
         self.move_made_event = threading.Event()
 
@@ -29,25 +35,24 @@ class ChessBot:
         self.move_thread = threading.Thread(target=self.move_controller)
         self.move_thread.start()
 
-        self.adversarial_search_thread = threading.Thread(
-            target=self.adversarial_search
-        )
-        self.adversarial_search_thread.start()
+        self.best_move_message_queue = Queue(1)
 
-        # TODO: Andrew: You may want to create a new thread here that fills out the search tree. This way, the search tree can be filled out
+        self.best_move_thread = threading.Thread(target=self.best_move_controller)
+        self.best_move_thread.start()
 
-    def adversarial_search(self):
-        # TODO: Andrew: Implement adversarial search tree building; You may need to create a class to control the search.
-        # This class would implement some function (i.e. get_best_move) that the move thread can call to get the best move given the board state
-        ...
+    def best_move_controller(self):
+        print("Playing from Opening Book!")
+        self.opening_controller()
 
-    def move_controller(self):
+        print("Opening Book exhausted! Using Adversarial Search!")
+        # self.adversarial_search() # TODO: Andrew
+        self.random_move_controller()  # FIXME: Temp line until search is implemented
+
+    def random_move_controller(self):
         while True:
             self.move_made_event.wait()  # Block until the opponent makes their move
 
-            # Choose Best Move and Make Move
             fen = self.board.fen()
-            # get_best_move(fen) # TODO: Andrew: Implement adversarial search for best move
 
             # Random Move
             legal_moves = get_moves_from_fen(fen)  # Get legal moves
@@ -57,6 +62,56 @@ class ChessBot:
                 print("No legal moves!")
                 continue
             best_move = random.choice(legal_moves)
+
+            self.best_move_message_queue.put(best_move)
+            self.move_made_event.clear()
+
+    def adversarial_search(self):
+        # TODO: Andrew: Implement adversarial search tree building; You may need to create a class to control the search.
+        # This class would implement some function (i.e. get_best_move) that the move thread can call to get the best move given the board state
+        return
+
+    def opening_controller(self):
+        """Uses Lichess' Mastes DB to get the most popular opening moves and statistics for which player won each game given the set of opening moves."""
+        while True:
+            # FIXME: This loop runs multiple times per one move; This should wait until a move is requested to run
+            self.move_made_event.wait()  # Block until the opponent makes their move
+
+            fen = self.board.fen()
+            opening_statistics = self.client.opening_explorer.get_masters_games(
+                position=fen
+            )
+            # print(json.dumps(opening_statistics, indent=2))
+
+            top_moves_data = pd.DataFrame(data=opening_statistics["moves"])
+            if len(top_moves_data) == 0:
+                return
+
+            top_moves_data["total"] = top_moves_data[["white", "draws", "black"]].sum(
+                axis=1
+            )
+            top_moves_data["win_pct"] = (
+                top_moves_data[self.player_color] / top_moves_data["total"]
+            )  # Win percentage is only calculated for our player color
+
+            print(top_moves_data)
+
+            best_move = top_moves_data.sort_values(by="win_pct", ascending=False).iloc[
+                0
+            ]["uci"]
+            print(best_move)
+
+            self.best_move_message_queue.put(best_move)
+            self.move_made_event.clear()
+
+    def move_controller(self):
+        while True:
+            self.move_made_event.wait()  # Block until the opponent makes their move
+
+            # Choose Best Move and Make Move
+            best_move = self.best_move_message_queue.get(
+                block=True
+            )  # Waits until best move is provided in the queue
 
             self.client.bots.make_move(self.id, best_move)
 
@@ -76,7 +131,9 @@ class ChessBot:
                             last_move = moves.split(" ")[-1]
                             try:
                                 self.board.push(
-                                    chess.Move.from_uci(last_move)
+                                    chess.Move.from_uci(
+                                        last_move
+                                    )  # TODO: Ensure no race conditions on this
                                 )  # Update board state with new move
                             except AssertionError as ae:
                                 print(ae)

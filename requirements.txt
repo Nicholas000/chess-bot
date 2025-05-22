@@ -1,6 +1,7 @@
-authlib
+# authlib
 python-dotenv
 flask
 requests
-ndjson
+# ndjson
 python-chess
+pandas
