@@ -5,3 +5,4 @@ requests
 # ndjson
 python-chess
 pandas
+berserk

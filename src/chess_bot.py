@@ -1,5 +1,6 @@
 # TODO: Add code for bot that actually makes intelligent moves
 import json
+import math
 import random
 import threading
 import time
@@ -45,8 +46,7 @@ class ChessBot:
         self.opening_controller()
 
         print("Opening Book exhausted! Using Adversarial Search!")
-        # self.adversarial_search() # TODO: Andrew
-        self.random_move_controller()  # FIXME: Temp line until search is implemented
+        self.adversarial_search()  # TODO: Nick double check adversarial search
 
     def random_move_controller(self):
         while True:
@@ -67,9 +67,12 @@ class ChessBot:
             self.move_made_event.clear()
 
     def adversarial_search(self):
-        # TODO: Andrew: Implement adversarial search tree building; You may need to create a class to control the search.
-        # This class would implement some function (i.e. get_best_move) that the move thread can call to get the best move given the board state
-        return
+        self.engine = MoveEngine(depth=4)
+        while True:
+            self.move_made_event.wait()  # wait for opponents move
+            best_move = self.engine.get_best_move(self.board)
+            self.best_move_message_queue.put(best_move.uci())  # convert move to string
+            self.move_made_event.clear()
 
     def opening_controller(self):
         """Uses Lichess' Mastes DB to get the most popular opening moves and statistics for which player won each game given the set of opening moves."""
@@ -186,22 +189,154 @@ class ChessBot:
         # - Play best move
 
 
-# TODO: Andrew
+PIECE_VALUES = {
+    chess.PAWN: 1,
+    chess.KNIGHT: 3,
+    chess.BISHOP: 3,
+    chess.ROOK: 5,
+    chess.QUEEN: 9,
+    chess.KING: 0,
+}
+
+
+# TODO: continue to test MoveEngine or add other advanced moves to its playlist
 class MoveEngine:
-    def __init__(self):
-        pass
+    def __init__(self, depth=3):  # depth of minimax tree
+        self.depth = depth
+        self.seen_fens = (
+            set()
+        )  # store FEN strings of previous positions to penalize repeating moves
 
-    def get_best_move(fen: str) -> str:
-        """
-        Use adversarial approach to get the best move given an initial position
+    # assigns a value to the current board state. Positive is good for White, negative is good for Black.
+    def evaluate_board(self, board: chess.Board) -> float:
+        if board.is_checkmate():
+            return -9999 if board.turn else 9999
+        if board.is_stalemate() or board.is_insufficient_material():
+            return 0
 
-        Approach: minimax, alpha-beta pruning;
-        Depth-limited search: can only search a few levels deep in the search tree;
-        heuristic function to evaluate position: each piece is assigned a weighted value which is added(subtracted) if that piece type is taken by(from) the bot
+        # material evaluation; sum up piece values for both sides
+        score = 0
+        for piece_type in PIECE_VALUES:
+            score += (
+                len(board.pieces(piece_type, chess.WHITE)) * PIECE_VALUES[piece_type]
+            )
+            score -= (
+                len(board.pieces(piece_type, chess.BLACK)) * PIECE_VALUES[piece_type]
+            )
 
-        Params:
-        fen (str): encoded string representation of the board state
+        # mobility bonus to encourage more legal moves
+        mobility = len(list(board.legal_moves))
+        score += 0.1 * mobility if board.turn == chess.WHITE else -0.1 * mobility
 
-        Returns:
-        move (str): UCI encoded string representation of best move
-        """
+        # castling bonus for king safety
+        if board.has_castling_rights(chess.WHITE):
+            score += 0.3
+        if board.has_castling_rights(chess.BLACK):
+            score -= 0.3
+
+        # penalize repetition (same board position over and over)
+        if board.fen() in self.seen_fens:
+            score -= 2
+
+        # TODO: Only check squares with pieces on them to improve speed
+        # bonus for attacking undefended opponent pieces
+        for square in chess.SQUARES:
+            piece = board.piece_at(square)
+            if piece and piece.color != board.turn:
+                attackers = board.attackers(board.turn, square)
+                defenders = board.attackers(not board.turn, square)
+                if attackers and not defenders:
+                    score += 0.3 * PIECE_VALUES[piece.piece_type]
+
+        return score
+
+    # Main interface for the bot to decide its move; returns the best legal move based on minimax evaluation
+    def get_best_move(self, board: chess.Board) -> chess.Move:
+        maximizing = board.turn == chess.WHITE
+        best_score = -math.inf if maximizing else math.inf
+        best_move = None
+
+        # order moves to improve alpha-beta pruning efficiency
+        ordered_moves = self.order_moves(board)
+
+        for move in ordered_moves:
+            board.push(move)
+            # detects mate in 1
+            if board.is_checkmate():
+                board.pop()
+                print(f"Mate in 1 found: {move}")
+                return move
+            score = self.minimax(
+                board, self.depth - 1, -math.inf, math.inf, not maximizing
+            )
+            board.pop()
+
+            print(f"Evaluating: {move}, Score: {score:.2f}")
+
+            # chooses the best move based on score value
+            if maximizing and score > best_score:
+                best_score = score
+                best_move = move
+            elif not maximizing and score < best_score:
+                best_score = score
+                best_move = move
+
+        if best_move:
+            self.seen_fens.add(board.fen())
+
+        print(f"Best move: {best_move}, Eval: {best_score:.2f}")
+        return best_move if best_move else random.choice(list(board.legal_moves))
+
+    # returns moves sorted by heuristic: Highest priority is captures, then it does its checks and last makes a quiet move. This method improves speed for search performance
+    def order_moves(self, board: chess.Board):
+        def move_score(move: chess.Move):
+            if board.is_capture(move):
+                captured = board.piece_at(move.to_square)
+                return PIECE_VALUES.get(captured.piece_type, 0) if captured else 0
+            if board.gives_check(move):
+                return 0.5
+            return 0
+
+        return sorted(board.legal_moves, key=move_score, reverse=True)
+
+    # minimax with alpha-beta pruning. Tries to maximize score for white and minimize for black
+    def minimax(
+        self,
+        board: chess.Board,
+        depth: int,
+        alpha: float,
+        beta: float,
+        maximizing: bool,
+    ) -> float:
+        if depth == 0 or board.is_game_over():
+            return self.evaluate_board(board)
+
+        # improve search efficiency by trying promising moves first
+        ordered_moves = self.order_moves(board)
+
+        if maximizing:
+            max_eval = -math.inf
+            for move in ordered_moves:
+                board.push(move)
+                eval_score = self.minimax(board, depth - 1, alpha, beta, False)
+                board.pop()
+
+                max_eval = max(max_eval, eval_score)
+                alpha = max(alpha, eval_score)
+                # cutoff search. no need to explore worse branches
+                if beta <= alpha:
+                    break
+            return max_eval
+        else:
+            min_eval = math.inf
+            for move in ordered_moves:
+                board.push(move)
+                eval_score = self.minimax(board, depth - 1, alpha, beta, True)
+                board.pop()
+
+                min_eval = min(min_eval, eval_score)
+                beta = min(beta, eval_score)
+                # cutoff
+                if beta <= alpha:
+                    break
+            return min_eval
