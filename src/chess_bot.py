@@ -74,16 +74,16 @@ class ChessBot:
         self.game_stream_thread.join()
         print("Game closed!")
 
-    def wait_for_move_event(self):
+    def wait_for_move_event(self) -> bool:
         while True:
             event_set = self.move_made_event.wait(3)
             if event_set:
-                return
+                return True
             elif (
                 not self.is_active
             ):  # If bot is no longer active, but the thread is still waiting, set the event flag to allow thread to finish
                 self.move_made_event.set()
-                return
+                return False
 
     def best_move_controller(self):
         print("Playing from Opening Book!")
@@ -97,7 +97,8 @@ class ChessBot:
 
     def random_move_controller(self):
         while self.is_active:
-            self.wait_for_move_event()  # Block until the opponent makes their move
+            if not self.wait_for_move_event():
+                return  # Block until the opponent makes their move
 
             fen = self.board.fen()
 
@@ -115,7 +116,8 @@ class ChessBot:
 
     def adversarial_search(self):
         while self.is_active:
-            self.wait_for_move_event()  # wait for opponents move
+            if not self.wait_for_move_event():
+                return  # wait for opponents move
             best_move = self.engine.get_best_move(self.board)
             self.best_move_message_queue.put(best_move.uci())  # convert move to string
             self.move_made_event.clear()
@@ -123,7 +125,8 @@ class ChessBot:
     def opening_controller(self):
         """Uses Lichess' Masters DB to get the most popular opening moves and statistics for which player won each game given the set of opening moves."""
         while self.is_active:
-            self.wait_for_move_event()  # Block until the opponent makes their move
+            if not self.wait_for_move_event():
+                return  # Block until the opponent makes their move
             fen = self.board.fen()
 
             while True:
@@ -166,7 +169,9 @@ class ChessBot:
 
     def move_controller(self):
         while self.is_active:
-            self.wait_for_move_event()  # Block until the opponent makes their move
+            if not self.wait_for_move_event():
+                return  # Block until the opponent makes their move
+
             # Choose Best Move and Make Move
             best_move = self.best_move_message_queue.get(
                 block=True
@@ -334,6 +339,14 @@ class MoveEngine:
                         not board.turn, square
                     ):  # same as not defended
                         score += 0.3 * PIECE_VALUES[piece.piece_type]
+
+        # bonus for attacking undefended opponent pieces
+        for square, piece in board.piece_map().items():
+            if board.is_attacked_by(piece.color, square):
+                if not board.is_attacked_by(
+                    not piece.color, square
+                ):  # same as not defended
+                    score += 0.3 * PIECE_VALUES[piece.piece_type]
 
         return score
 

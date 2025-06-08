@@ -159,7 +159,7 @@ class ChessGUI:
         status_styles = {
             "Starting": {"background": "lightgrey"},
             "Active": {"background": "white"},
-            "Win": {"background": "b6d7a8"},  # gree
+            "Win": {"background": "#b6d7a8"},  # green
             "Loss": {"background": "#e06666"},  # red
             "Draw": {"background": "#ffe599"},  # yellow
         }
