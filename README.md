@@ -9,30 +9,34 @@ pip install -r requirements.txt
 
 Step 2: Add .env file
 ----------------------
-add the `.env` file with the following contents:
+Add the `.env` file with the following contents (to simplify the set-up work, I have provided this file in the zip folder):
 
 ```
 SECRET_KEY="{ lichess API key }"
 ```
+If you would like to create your own API key, this thread was helpful in setting it up: https://lichess.org/forum/general-chess-discussion/how-do-you-make-a-lichess-bot
+
 Minimum API key access privileges:
 - bot:play
 - challenge:write
 
 Step 3: Run the App
 -------------------
-run the app:
+cd to the project directory.
+i.e.:
 ```
-python -m src.app.app
+cd C\Users\...\chess-bot
 ```
 
-Step 4: Load the URL
+Run the app:
+```
+python -m src.gui
+```
+This should pop up an application window
+
+Step 4: Configure Game Settings and Play
 --------------------
-load this url in your browser: http://127.0.0.1:5000/
-
-Step 5: Start Game
------------
-hit the "Play AI" button to start a game with the Stockfish AI. It will automatically open up the game in a separate tab
-
-<!-- Step 6: UI
---------------
-interact with the UI to start game, view games, etc. **(This functionality needs to be added)** -->
+In the GUI that pops up, you may:
+1. Use the "Settings" section to configure the game settings as you like.
+2. Hit "Play AI" to start a game against the Stockfish AI. This should automatically load the game into your web browser.
+3. Once you have started a game, use the "Current Game" section to view game settings and reopen the game in your web browser if you accidentally close it.

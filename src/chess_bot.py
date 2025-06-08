@@ -1,5 +1,4 @@
 # TODO: Add code for bot that actually makes intelligent moves
-import json
 import math
 import random
 import threading
@@ -8,6 +7,7 @@ from queue import Queue
 from typing import Any, Dict
 
 import berserk
+import berserk.exceptions
 import chess
 import pandas as pd
 
@@ -18,15 +18,29 @@ from src.move_generator import get_moves_from_fen
 
 class ChessBot:
     def __init__(self, response: Dict[str, Any], client: berserk.Client):
-        # TODO: Verify response is in the correct format
         self.id = response["id"]
         self.full_id = response["fullId"]
         self.fen = response["fen"]
+        self.player_color = None
         self.client = client
-        self.bot_id = self.client.account.get()["id"]
+
+        while True:
+            try:
+                self.bot_id = self.client.account.get()["id"]
+                break
+            except berserk.exceptions.ResponseError as re:
+                if re.status_code == 429:
+                    print("Too many API requests! Waiting 1min...")
+                    time.sleep(60)
         self.board = chess.Board(
             fen=self.fen
         )  # Keep an internal representation of the board
+        self.is_active = (
+            True  # Keep track of whether game is active to allow move making
+        )
+        self.status = None
+        self.update_status("starting")
+        self.engine = MoveEngine(depth=4)
 
         self.move_made_event = threading.Event()
 
@@ -41,16 +55,49 @@ class ChessBot:
         self.best_move_thread = threading.Thread(target=self.best_move_controller)
         self.best_move_thread.start()
 
+    def close(self):
+        """Closes any bot game if active and stops threads"""
+        print("Closing Game...")
+        self.is_active = False  # This should cause all threads to stop after one cycle
+        self.best_move_thread.join()
+        self.move_thread.join()
+
+        while True:
+            try:
+                self.client.bots.resign_game(self.id)
+                break
+            except berserk.exceptions.ResponseError as re:
+                if re.status_code == 429:
+                    print("Too many API requests! Waiting 1min...")
+                    time.sleep(60)
+
+        self.game_stream_thread.join()
+        print("Game closed!")
+
+    def wait_for_move_event(self):
+        while True:
+            event_set = self.move_made_event.wait(3)
+            if event_set:
+                return
+            elif (
+                not self.is_active
+            ):  # If bot is no longer active, but the thread is still waiting, set the event flag to allow thread to finish
+                self.move_made_event.set()
+                return
+
     def best_move_controller(self):
         print("Playing from Opening Book!")
         self.opening_controller()
 
+        if not self.is_active:
+            return
+
         print("Opening Book exhausted! Using Adversarial Search!")
-        self.adversarial_search()  # TODO: Nick double check adversarial search
+        self.adversarial_search()
 
     def random_move_controller(self):
-        while True:
-            self.move_made_event.wait()  # Block until the opponent makes their move
+        while self.is_active:
+            self.wait_for_move_event()  # Block until the opponent makes their move
 
             fen = self.board.fen()
 
@@ -67,24 +114,28 @@ class ChessBot:
             self.move_made_event.clear()
 
     def adversarial_search(self):
-        self.engine = MoveEngine(depth=4)
-        while True:
-            self.move_made_event.wait()  # wait for opponents move
+        while self.is_active:
+            self.wait_for_move_event()  # wait for opponents move
             best_move = self.engine.get_best_move(self.board)
             self.best_move_message_queue.put(best_move.uci())  # convert move to string
             self.move_made_event.clear()
 
     def opening_controller(self):
-        """Uses Lichess' Mastes DB to get the most popular opening moves and statistics for which player won each game given the set of opening moves."""
-        while True:
-            # FIXME: This loop runs multiple times per one move; This should wait until a move is requested to run
-            self.move_made_event.wait()  # Block until the opponent makes their move
-
+        """Uses Lichess' Masters DB to get the most popular opening moves and statistics for which player won each game given the set of opening moves."""
+        while self.is_active:
+            self.wait_for_move_event()  # Block until the opponent makes their move
             fen = self.board.fen()
-            opening_statistics = self.client.opening_explorer.get_masters_games(
-                position=fen
-            )
-            # print(json.dumps(opening_statistics, indent=2))
+
+            while True:
+                try:
+                    opening_statistics = self.client.opening_explorer.get_masters_games(
+                        position=fen
+                    )
+                    break
+                except berserk.exceptions.ResponseError as re:
+                    if re.status_code == 429:
+                        print("Too many API requests! Waiting 1min...")
+                        time.sleep(60)
 
             top_moves_data = pd.DataFrame(data=opening_statistics["moves"])
             if len(top_moves_data) == 0:
@@ -93,38 +144,61 @@ class ChessBot:
             top_moves_data["total"] = top_moves_data[["white", "draws", "black"]].sum(
                 axis=1
             )
-            top_moves_data["win_pct"] = (
-                top_moves_data[self.player_color] / top_moves_data["total"]
-            )  # Win percentage is only calculated for our player color
+            top_moves_data["eval"] = (
+                top_moves_data[self.player_color]
+                - top_moves_data[self.opponent_color(self.player_color)]
+            ) / top_moves_data["total"]
 
-            print(top_moves_data)
+            # Filter for only moves with higher win percentage for our player and with a significant number of times it has been played
+            good_moves_data = top_moves_data[
+                (top_moves_data["eval"] > 0.05) & (top_moves_data["total"] > 10)
+            ]
+            good_moves_data = good_moves_data.sort_values(by="eval", ascending=False)
+            print(good_moves_data)
+            if len(good_moves_data) == 0:
+                return
 
-            best_move = top_moves_data.sort_values(by="win_pct", ascending=False).iloc[
-                0
-            ]["uci"]
-            print(best_move)
+            best_move = good_moves_data.iloc[0]["uci"]
+            print(f"Best move: {best_move}")
 
             self.best_move_message_queue.put(best_move)
             self.move_made_event.clear()
 
     def move_controller(self):
-        while True:
-            self.move_made_event.wait()  # Block until the opponent makes their move
-
+        while self.is_active:
+            self.wait_for_move_event()  # Block until the opponent makes their move
             # Choose Best Move and Make Move
             best_move = self.best_move_message_queue.get(
                 block=True
             )  # Waits until best move is provided in the queue
 
-            self.client.bots.make_move(self.id, best_move)
+            while True:
+                try:
+                    self.client.bots.make_move(self.id, best_move)
+                    break
+                except berserk.exceptions.ResponseError as re:
+                    print(re)
+                    if re.status_code == 429:
+                        print("Too many API requests! Waiting 1min...")
+                        time.sleep(60)
 
             self.move_made_event.clear()  # Clear to wait again until thread watching for opponent moves resets it
 
     def stream_game_state(self):
         print(f"Streaming game state on thread {self.game_stream_thread.getName()}")
 
-        game_state_response = self.client.bots.stream_game_state(self.id)
+        while True:
+            try:
+                game_state_response = self.client.bots.stream_game_state(self.id)
+                break
+            except berserk.exceptions.ResponseError as re:
+                if re.status_code == 429:
+                    print("Too many API requests! Waiting 1min...")
+                    time.sleep(60)
+
         for event in game_state_response:
+            if not self.is_active:
+                return
             match event["type"]:
                 case "gameState":
                     match event["status"]:
@@ -151,42 +225,49 @@ class ChessBot:
                             self.is_my_turn = not self.is_my_turn  # change turns
                         case "mate" | "resign" | "draw" | "stalemate":  # Game ended
                             print(f"Game ended by {event["status"]}!")
-                            print(
-                                "You won!"
-                                if event.get("winner") == self.player_color
-                                else "You lost!"
-                            )
+                            self.is_active = False
+                            if event["status"] in ["draw", "stalemate"]:
+                                print(f"Tie!")
+                                self.update_status("draw")
+                            elif event.get("winner") == self.player_color:
+                                print("You won!")
+                                self.update_status("win")
+                            else:
+                                print("You lost!")
+                                self.update_status("loss")
                             return
-                        case _:
-                            print(event)
+                        # case _:
+                        #     print(event)
                 case "gameFull":
                     match event["state"]["status"]:
                         case "started":
+                            self.update_status("active")
+
                             # Get player color of the bot
                             if self.bot_id == event["white"].get("id", None):
                                 self.player_color = "white"
+                                self.engine.player_color = chess.WHITE
                             elif self.bot_id == event["black"].get("id", None):
                                 self.player_color = "black"
+                                self.engine.player_color = chess.BLACK
                             else:
-                                print(
-                                    "Unable to determine bot color! Defaulting to white!"
-                                )
-                                self.player_color = "black"
+                                raise Exception("Unable to determine bot color!")
 
                             # Set whos turn it is to start move control loop
                             self.is_my_turn = self.player_color == "white"
                             if self.is_my_turn:
                                 self.move_made_event.set()
-                        case _:
-                            print(event)
-                case _:
-                    print(event)
+                #         case _:
+                #             print(event)
+                # case _:
+                #     print(event)
 
-        # Start listening for events
-        # On move event from other player (LOOP):
-        # - Pass board state to move engine
-        # - Get best move from move engine
-        # - Play best move
+    def opponent_color(self, player_color: str):
+        opponent_colors = {"black": "white", "white": "black"}
+        return opponent_colors.get(player_color)
+
+    def update_status(self, status: str):
+        self.status = status
 
 
 PIECE_VALUES = {
@@ -206,6 +287,7 @@ class MoveEngine:
         self.seen_fens = (
             set()
         )  # store FEN strings of previous positions to penalize repeating moves
+        self.player_color = None
 
     # assigns a value to the current board state. Positive is good for White, negative is good for Black.
     def evaluate_board(self, board: chess.Board) -> float:
@@ -215,44 +297,49 @@ class MoveEngine:
             return 0
 
         # material evaluation; sum up piece values for both sides
-        score = 0
-        for piece_type in PIECE_VALUES:
-            score += (
-                len(board.pieces(piece_type, chess.WHITE)) * PIECE_VALUES[piece_type]
+        score = sum(
+            PIECE_VALUES[piece_type]
+            * (
+                len(board.pieces(piece_type, self.player_color))
+                - len(board.pieces(piece_type, not self.player_color))
             )
-            score -= (
-                len(board.pieces(piece_type, chess.BLACK)) * PIECE_VALUES[piece_type]
-            )
+            for piece_type in PIECE_VALUES
+        )
 
         # mobility bonus to encourage more legal moves
-        mobility = len(list(board.legal_moves))
-        score += 0.1 * mobility if board.turn == chess.WHITE else -0.1 * mobility
+        mobility = board.legal_moves.count()
+        score += 0.1 * mobility if board.turn == self.player_color else -0.1 * mobility
 
         # castling bonus for king safety
-        if board.has_castling_rights(chess.WHITE):
+        if board.has_kingside_castling_rights(
+            self.player_color
+        ) and board.has_queenside_castling_rights(self.player_color):
             score += 0.3
-        if board.has_castling_rights(chess.BLACK):
+        if board.has_kingside_castling_rights(
+            not self.player_color
+        ) and board.has_queenside_castling_rights(not self.player_color):
             score -= 0.3
 
         # penalize repetition (same board position over and over)
         if board.fen() in self.seen_fens:
             score -= 2
 
-        # TODO: Only check squares with pieces on them to improve speed
+        # TODO: Add some incentive for pawn pushing in the endgame
+
         # bonus for attacking undefended opponent pieces
-        for square in chess.SQUARES:
-            piece = board.piece_at(square)
-            if piece and piece.color != board.turn:
-                attackers = board.attackers(board.turn, square)
-                defenders = board.attackers(not board.turn, square)
-                if attackers and not defenders:
-                    score += 0.3 * PIECE_VALUES[piece.piece_type]
+        for square, piece in board.piece_map().items():
+            if piece.color != board.turn:
+                if board.is_attacked_by(board.turn, square):
+                    if not board.is_attacked_by(
+                        not board.turn, square
+                    ):  # same as not defended
+                        score += 0.3 * PIECE_VALUES[piece.piece_type]
 
         return score
 
     # Main interface for the bot to decide its move; returns the best legal move based on minimax evaluation
     def get_best_move(self, board: chess.Board) -> chess.Move:
-        maximizing = board.turn == chess.WHITE
+        maximizing = board.turn == self.player_color
         best_score = -math.inf if maximizing else math.inf
         best_move = None
 
@@ -274,10 +361,9 @@ class MoveEngine:
             print(f"Evaluating: {move}, Score: {score:.2f}")
 
             # chooses the best move based on score value
-            if maximizing and score > best_score:
-                best_score = score
-                best_move = move
-            elif not maximizing and score < best_score:
+            if (maximizing and score > best_score) or (
+                not maximizing and score < best_score
+            ):
                 best_score = score
                 best_move = move
 
@@ -308,35 +394,57 @@ class MoveEngine:
         beta: float,
         maximizing: bool,
     ) -> float:
+        # Detect leaf nodes
         if depth == 0 or board.is_game_over():
             return self.evaluate_board(board)
 
         # improve search efficiency by trying promising moves first
         ordered_moves = self.order_moves(board)
 
+        # if maximizing:
+        #     max_eval = -math.inf
+        #     for move in ordered_moves:
+        #         board.push(move)
+        #         eval_score = self.minimax(board, depth - 1, alpha, beta, False)
+        #         board.pop()
+
+        #         max_eval = max(max_eval, eval_score)
+        #         alpha = max(alpha, eval_score)
+        #         # cutoff search. no need to explore worse branches
+        #         if beta <= alpha:
+        #             break
+        #     return max_eval
+        # else:
+        #     min_eval = math.inf
+        #     for move in ordered_moves:
+        #         board.push(move)
+        #         eval_score = self.minimax(board, depth - 1, alpha, beta, True)
+        #         board.pop()
+
+        #         min_eval = min(min_eval, eval_score)
+        #         beta = min(beta, eval_score)
+        #         # cutoff
+        #         if beta <= alpha:
+        #             break
+        #     return min_eval
+
         if maximizing:
-            max_eval = -math.inf
             for move in ordered_moves:
                 board.push(move)
-                eval_score = self.minimax(board, depth - 1, alpha, beta, False)
+                alpha = max(alpha, self.minimax(board, depth - 1, alpha, beta, False))
                 board.pop()
 
-                max_eval = max(max_eval, eval_score)
-                alpha = max(alpha, eval_score)
-                # cutoff search. no need to explore worse branches
                 if beta <= alpha:
-                    break
-            return max_eval
+                    return beta
+
+            return alpha
         else:
-            min_eval = math.inf
             for move in ordered_moves:
                 board.push(move)
-                eval_score = self.minimax(board, depth - 1, alpha, beta, True)
+                beta = min(beta, self.minimax(board, depth - 1, alpha, beta, True))
                 board.pop()
 
-                min_eval = min(min_eval, eval_score)
-                beta = min(beta, eval_score)
-                # cutoff
                 if beta <= alpha:
-                    break
-            return min_eval
+                    return alpha
+
+            return beta
