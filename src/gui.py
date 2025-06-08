@@ -224,7 +224,7 @@ class ChessGUI:
         session.headers.update(
             {
                 "Authorization": f"Bearer {secret_key}",
-                "User-Agent": "chess-bot/1.0 (contact: github.com/Nicholas000/function-generator)",
+                "User-Agent": "chess-bot/1.0 (contact: github.com/Nicholas000/chess-bot)",
             }
         )
 
