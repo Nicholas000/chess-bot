@@ -1,6 +1,8 @@
 # chess-bot
 AI chess bot integrated using Lichess API
 
+**NOTE:** Tested using Python version 3.13
+
 Step 1: Navigate to the project directory
 ----------------------
 cd to the project directory.
