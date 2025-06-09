@@ -179,7 +179,3 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
-
-# Custom
-src/chess_bot_old.py
-src/test.py

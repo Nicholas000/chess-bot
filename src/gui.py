@@ -1,3 +1,9 @@
+"""
+Authors: Nicholas Learman, Andrew Ballard
+Course: CS 481: Artificial Intelligence, Spring 2025
+Project: Lichess Chess Bot: Minimax with Alpha-Beta Pruning
+"""
+
 import os
 import tkinter as tk
 import webbrowser
@@ -11,38 +17,33 @@ from dotenv import load_dotenv
 from src.chess_bot import ChessBot
 
 
-# TODO: Figure out why program locks after closing gui
 class ChessGUI:
+    """GUI Class to configure game settings and start a bot game"""
+
     def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("Lichess AI")
-        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
-        # self.root.geometry("800x500")
-
-        self.ai_difficulty = tk.IntVar(self.root, 1)
-        self.player_color = tk.StringVar(self.root, value="random")
-
-        self.start_game_button = ttk.Button(
-            self.root, text="Play AI", command=self.play_ai
-        )
-        self.status_thread = None
-
-        self.active_game = False
-        self.active_game_bot: ChessBot = None
-        self.active_game_player_color = None
-
-        self.define_styles()
+        self.configure_root()
 
         self.create_game_controls_frame()
         self.create_active_game_frame()
+
+        # GUI element to start a game
+        self.start_game_button = ttk.Button(
+            self.root, text="Play AI", command=self.play_ai
+        )
+
+        # Info about active game
+        self.active_game = False
+        self.active_game_bot: ChessBot = None
 
         self.root_grid_layout()
 
         self.connect_to_lichess()
 
-        self.root.mainloop()
+        self.root.mainloop()  # Run GUI
 
     def _on_closing(self):
+        """Function triggered when closing the application window.
+        Warns the user before closing if a game is still active."""
         if self.active_game_bot and self.active_game_bot.is_active:
             if messagebox.askokcancel(
                 "Exit",
@@ -53,17 +54,23 @@ class ChessGUI:
         else:
             self.root.destroy()
 
-    def define_styles(self):
+    def configure_root(self):
+        """Configure root window properties"""
+        self.root = tk.Tk()
+        self.root.title("Lichess AI")
+        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
         self.root.wm_iconphoto(
             True, tk.PhotoImage(file=os.path.abspath("src/assets/pawn.png"))
         )
 
     def create_game_controls_frame(self):
+        """GUI Frame to hold widgets for configuring game controls"""
         self.controls_frame = ttk.Labelframe(
             self.root, text="Settings", borderwidth=2, relief="solid", padding=5
         )
 
         # Set AI Difficulty
+        self.ai_difficulty = tk.IntVar(self.root, 1)
         self.ai_difficulty_frame = ttk.Labelframe(
             self.controls_frame,
             text="AI Difficulty",
@@ -82,6 +89,7 @@ class ChessGUI:
         self.ai_difficulty_scale.grid(row=1, column=1)
 
         # Set Player Color
+        self.player_color = tk.StringVar(self.root, value="random")
         self.player_color_frame = ttk.Labelframe(
             self.controls_frame,
             text="Player Color",
@@ -111,20 +119,26 @@ class ChessGUI:
         self.set_pcol_white_rb.grid(row=2, column=1, sticky="w")
         self.set_pcol_black_rb.grid(row=3, column=1, sticky="w")
 
-        # Controls frame grid layout
+        # Grid Layout
         self.ai_difficulty_frame.grid(row=1, column=1, sticky="ew")
         self.player_color_frame.grid(row=2, column=1, sticky="ew")
 
     def create_active_game_frame(self):
+        """Creates frame to hold info on the active game
+        Will be empty until a game is started"""
         self.active_game_frame = ttk.Labelframe(
             self.root, text="Current Game", borderwidth=2, relief="solid", padding=5
         )
 
     def create_game_info_frame(self, url: str, ai_difficulty: int, player_color: str):
+        """Creates a frame containg game info for the given url game.
+        Frame is placed in the existing active game frame."""
         self.game_info_frame = ttk.Frame(self.active_game_frame)
+
         self.ai_difficulty_label = ttk.Label(
             self.game_info_frame, text=f"AI Difficulty: {ai_difficulty}"
         )
+
         self.player_color_label = ttk.Label(
             self.game_info_frame,
             text=f"Player Color: {(
@@ -136,6 +150,8 @@ class ChessGUI:
             text="Open Game",
             command=lambda: webbrowser.open(url),
         )
+
+        # Displays info about game status such as "Active", "Win", "Loss", "Draw"
         self.status_var = tk.StringVar(self.game_info_frame, value="Starting")
         self.status_var.trace_add("write", self._update_status_style)
         self.status_label = ttk.Label(
@@ -145,6 +161,8 @@ class ChessGUI:
             padding=5,
             anchor="center",
         )
+
+        # Grid Layout
         self.status_label.grid(row=1, column=1, pady=5, sticky="nsew")
         self.ai_difficulty_label.grid(row=2, column=1, pady=5, sticky="nsew")
         self.player_color_label.grid(row=3, column=1, pady=5, sticky="nsew")
@@ -155,6 +173,7 @@ class ChessGUI:
         self.active_game_frame.grid_columnconfigure(1, weight=1)
 
     def _update_status_style(self, _, _1, _2):
+        """Callback function to update the color of the game info status label whenever it changes"""
         status_styles = {
             "Starting": {"background": "lightgrey"},
             "Active": {"background": "white"},
@@ -163,12 +182,13 @@ class ChessGUI:
             "Draw": {"background": "#ffe599"},  # yellow
         }
 
-        print(f"Updating to status: {self.status_var.get()}")
+        # print(f"Updating to status: {self.status_var.get()}")
         configs = status_styles.get(self.status_var.get(), {"background": "white"})
 
         self.status_label.configure(**configs)
 
     def start_status_watcher(self):
+        """Starts callbacks to watch for game status updates"""
         self.last_status = None
         self.watch_status_loop()
 
@@ -184,11 +204,13 @@ class ChessGUI:
         self.root.after(1000, self.watch_status_loop)  # every 1 second
 
     def start_color_watcher(self):
+        """Starts callbacks to watch for player color.
+        Required when player color is set to random."""
         self.last_color = None
         self.watch_color_loop()
 
     def watch_color_loop(self):
-        """Look for player color value from ChessBot and update the display when it is found"""
+        """Look for player color value from ChessBot, updates the display when it is found, and breaks the loop"""
         current_color = self.active_game_bot.player_color
 
         if current_color != self.last_color and current_color is not None:
@@ -200,10 +222,12 @@ class ChessGUI:
             self.root.after(1000, self.watch_color_loop)  # every 1 second
 
     def start_watchers(self):
+        """Starts callbacks to watch for active game settings"""
         self.start_status_watcher()
         self.start_color_watcher()
 
     def root_grid_layout(self):
+        """Grid layout for root window"""
         self.root.grid_columnconfigure(2, minsize=180, weight=1)
         self.controls_frame.grid(row=1, column=1, padx=10, pady=10, sticky="nsew")
         self.start_game_button.grid(
@@ -213,11 +237,11 @@ class ChessGUI:
 
     # Non-gui Functions
     def connect_to_lichess(self):
+        """Connect to the Lichess API using berserk client"""
         load_dotenv()
         self.LICHESS_HOST = os.getenv("LICHESS_HOST", "https://lichess.org")
         secret_key = os.getenv("SECRET_KEY")
 
-        # session = berserk.TokenSession(secret_key)
         # Create a custom requests session
         session = requests.Session()
         session.headers.update(
@@ -230,6 +254,8 @@ class ChessGUI:
         self.client = berserk.Client(session=session)
 
     def play_ai(self):
+        """Start a game against the LiChess AI"""
+
         # Warn user if game is active already
         def confirm_and_close():
             if messagebox.askokcancel(
@@ -246,6 +272,7 @@ class ChessGUI:
         self.create_ai()
 
     def create_ai(self):
+        """Wrapper for the Lichess API call. Waits to create a game if encountering API rate limiting."""
         args = {
             "level": self.ai_difficulty.get(),
             "clock_limit": 3600,
@@ -260,16 +287,20 @@ class ChessGUI:
         except berserk.exceptions.ResponseError as re:
             if re.status_code == 429:
                 print("Too many API requests! Waiting 1min...")
-                self.root.after(60000, self.create_ai)
+                self.root.after(60000, self.create_ai, args=args)
 
     def on_ai_created(self, response, args):
+        """Upon succesful ai game creation, starts our chess bot and related GUI activities"""
+        # Open game stream in web browser
         fullId = response["fullId"]
         url = f"{self.LICHESS_HOST}/{fullId}"
         webbrowser.open(url)
 
+        # Create the chess bot (automatically starts on creation)
         self.active_game_bot = ChessBot(response, self.client)
         self.active_game = True
 
+        # Create GUI elements and watchers to display the active game
         self.create_game_info_frame(url, args["level"], args["color"])
         self.start_watchers()
 

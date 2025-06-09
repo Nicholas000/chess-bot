@@ -3,3 +3,4 @@ python-chess
 pandas
 berserk
 tkinter
+requests
