@@ -43,14 +43,13 @@ class ChessGUI:
         self.root.mainloop()
 
     def _on_closing(self):
-        if self.active_game_bot:
-            if self.active_game_bot.is_active:
-                if messagebox.askokcancel(
-                    "Exit",
-                    "Are you sure you want to exit? A game is still active and will be resigned if you leave now.",
-                ):
-                    self.active_game_bot.close()
-                    self.root.destroy()
+        if self.active_game_bot and self.active_game_bot.is_active:
+            if messagebox.askokcancel(
+                "Exit",
+                "Are you sure you want to exit? A game is still active and will be resigned if you leave now.",
+            ):
+                self.active_game_bot.close()
+                self.root.destroy()
         else:
             self.root.destroy()
 
