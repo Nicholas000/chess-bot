@@ -346,15 +346,6 @@ class MoveEngine:
 
         # TODO: Add some incentive for pawn pushing in the endgame
 
-        # # bonus for attacking undefended opponent pieces
-        # for square, piece in board.piece_map().items():
-        #     if piece.color != board.turn:
-        #         if board.is_attacked_by(board.turn, square):
-        #             if not board.is_attacked_by(
-        #                 not board.turn, square
-        #             ):  # same as not defended
-        #                 score += 0.3 * PIECE_VALUES[piece.piece_type]
-
         # bonus for attacking undefended opponent pieces
         for square, piece in board.piece_map().items():
             if board.is_attacked_by(piece.color, square):
@@ -368,7 +359,8 @@ class MoveEngine:
     def get_best_move(self, board: chess.Board) -> chess.Move:
         """Main interface for the bot to decide its move; returns the best legal move based on minimax evaluation"""
         maximizing = board.turn == self.player_color
-        best_score = -math.inf if maximizing else math.inf
+        alpha_beta = [-math.inf, math.inf]
+        best_score = alpha_beta[not maximizing]
         best_move = None
 
         # order moves to improve alpha-beta pruning efficiency
@@ -381,25 +373,27 @@ class MoveEngine:
                 board.pop()
                 print(f"Mate in 1 found: {move}")
                 return move
-            score = self.minimax(
-                board, self.depth - 1, -math.inf, math.inf, not maximizing
+            alpha_beta[not maximizing] = self.minimax(
+                board, self.depth - 1, alpha_beta[0], alpha_beta[1], not maximizing
             )
             board.pop()
 
-            print(f"Evaluating: {move}, Score: {score:.2f}")
-
             # chooses the best move based on score value
-            if (maximizing and score > best_score) or (
-                not maximizing and score < best_score
+            if (maximizing and alpha_beta[not maximizing] > best_score) or (
+                not maximizing and alpha_beta[not maximizing] < best_score
             ):
-                best_score = score
+                print(f"Evaluating: {move}, Score: {alpha_beta[not maximizing]:.2f}")
+                best_score = alpha_beta[not maximizing]
                 best_move = move
+            else:
+                print(f"Evaluating: {move}, Pruned")
 
         if best_move:
             self.seen_fens.add(board.fen())
 
         print(f"Best move: {best_move}, Eval: {best_score:.2f}")
         return best_move if best_move else random.choice(list(board.legal_moves))
+
 
     def order_moves(self, board: chess.Board):
         """returns moves sorted by heuristic: Highest priority is captures, then it does its checks and last makes a quiet move.
