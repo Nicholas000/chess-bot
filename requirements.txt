@@ -1,4 +1,6 @@
-authlib
 python-dotenv
-flask
+python-chess
+pandas
+berserk
+tkinter
 requests
