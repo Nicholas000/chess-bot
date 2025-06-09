@@ -1,13 +1,21 @@
 # chess-bot
 AI chess bot integrated using Lichess API
 
-Step 1: Install required libraries
+Step 1: Navigate to the project directory
+----------------------
+cd to the project directory.
+i.e.:
+```
+cd C\Users\...\chess-bot
+```
+
+Step 2: Install required libraries
 ----------------------
 ```
 pip install -r requirements.txt
 ```
 
-Step 2: Add .env file
+Step 3: Add .env file
 ----------------------
 Add the `.env` file with the following contents (to simplify the set-up work, I have provided this file in the zip folder):
 
@@ -20,14 +28,8 @@ Minimum API key access privileges:
 - bot:play
 - challenge:write
 
-Step 3: Run the App
+Step 4: Run the App
 -------------------
-cd to the project directory.
-i.e.:
-```
-cd C\Users\...\chess-bot
-```
-
 Run the app:
 ```
 python -m src.gui
