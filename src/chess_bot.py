@@ -48,7 +48,7 @@ class ChessBot:
         )
         self.status = None
         self.status = "starting"
-        self.engine = MoveEngine(depth=SEARCH_DEPTH)
+        self.engine = MoveEngineWithLTRMoveOrdering(depth=SEARCH_DEPTH)
 
         # Initialize threads and thread communication objects
         self.move_made_event = threading.Event()
@@ -277,22 +277,10 @@ class MoveEngine:
     }
 
     def __init__(self, depth=3):  # depth of minimax tree
-        from src.ltr_model import feature_analysis, train_ltr_model
-
         self.depth = depth
         # store FEN strings of previous positions to penalize repeating moves
         self.seen_fens = set()
         self.player_color = None
-
-        # Generate LTR model from most recent data
-        if os.path.exists(DATASET_FILE_PATH):
-            train_ltr_model(DATASET_FILE_PATH, LTR_MODEL_FILE_PATH)
-            model_path = LTR_MODEL_FILE_PATH
-        else:  # Backup model
-            model_path = r"src\LTR_model.txt"
-
-        self.ltr_model = lightgbm.Booster(model_file=model_path)
-        feature_analysis(model_path)
 
     def evaluate_board(self, board: chess.Board) -> float:
         """assigns a value to the current board state. Positive is good for White, negative is good for Black."""
@@ -391,31 +379,12 @@ class MoveEngine:
     def order_moves(self, board: chess.Board, depth: int):
         """returns moves sorted by heuristic: Highest priority is captures, then it does its checks and last makes a quiet move.
         This method improves speed for search performance"""
-        if (
-            depth >= self.depth
-        ):  # Only use LTR model at early depths. Otherwise it creates too much overhead
-            # Improved Learing to Rank move ordering
-            # Generate features for all moves
-            grouped_features = pd.concat(
-                [
-                    generate_features(board, move, self.player_color)
-                    for move in board.legal_moves
-                ],
-                ignore_index=True,
-            )
-
-            rankings = self.ltr_model.predict(data=grouped_features).argsort()[
-                ::-1
-            ]  # Get index ordering based on predicted ranking
-            legal_moves = list(board.legal_moves)
-            return [legal_moves[i] for i in rankings]  # Sort based on ranking
-        else:
-            # Original project move ordering
-            return sorted(
-                board.legal_moves,
-                key=lambda move: self.move_score(board, move),
-                reverse=True,
-            )
+        # Sort moves on simple heuristic
+        return sorted(
+            board.legal_moves,
+            key=lambda move: self.move_score(board, move),
+            reverse=True,
+        )
 
     def minimax(
         self,
@@ -458,6 +427,53 @@ class MoveEngine:
                     return alpha
 
             return beta
+
+
+class MoveEngineWithLTRMoveOrdering(MoveEngine):
+    def __init__(self, depth=3):
+        super().__init__(depth)
+
+        from src.ltr_model import feature_analysis, train_ltr_model
+
+        # Generate LTR model from most recent data
+        if os.path.exists(DATASET_FILE_PATH):
+            train_ltr_model(DATASET_FILE_PATH, LTR_MODEL_FILE_PATH)
+            model_path = LTR_MODEL_FILE_PATH
+        else:  # Backup model
+            model_path = r"src\LTR_model.txt"
+
+        self.ltr_model = lightgbm.Booster(model_file=model_path)
+        feature_analysis(model_path)
+
+    def order_moves(self, board: chess.Board, depth: int):
+        """returns moves sorted using a trained Learning to Rank (LTR) prediction model
+        LTR model is used for early branches but not further as it creates a lot of overhead
+        """
+        if (
+            depth >= self.depth
+        ):  # Only use LTR model at early depths. Otherwise it creates too much overhead
+            # Improved Learing to Rank move ordering
+            # Generate features for all moves
+            grouped_features = pd.concat(
+                [
+                    generate_features(board, move, self.player_color)
+                    for move in board.legal_moves
+                ],
+                ignore_index=True,
+            )
+
+            rankings = self.ltr_model.predict(data=grouped_features).argsort()[
+                ::-1
+            ]  # Get index ordering based on predicted ranking
+            legal_moves = list(board.legal_moves)
+            return [legal_moves[i] for i in rankings]  # Sort based on ranking
+        else:
+            # Original project move ordering
+            return sorted(
+                board.legal_moves,
+                key=lambda move: self.move_score(board, move),
+                reverse=True,
+            )
 
 
 # Feature Generation Functions
