@@ -97,7 +97,7 @@ class ChessGUI:
         self.ai_difficulty_scale = ttk.LabeledScale(
             self.ai_difficulty_frame,
             from_=1,
-            to=9,
+            to=8,
             variable=self.ai_difficulty,
             compound="bottom",
             padding=3,
@@ -317,7 +317,9 @@ class ChessGUI:
         self.create_game_info_frame(url, args["level"], args["color"])
         self.start_watchers()
 
-    def safe_api_call_tkinter(self, func, *args, retries=3, delay=2000, **kwargs):
+    def safe_api_call_tkinter(
+        self, func, *args, retries=3, delay=2000, curr_try=1, **kwargs
+    ):
         """Wrapper for Berserk API calls to handle API errors.
         Cannot use the standard safe_api_call since calling time.sleep on the GUI will disrupt all user inputs as well
 
@@ -328,22 +330,45 @@ class ChessGUI:
             delay (int): the number of milliseconds to delay between calls. Increases on retries
             **kwargs (dict): the kwargs to pass to the function
         """
-        for i in range(retries):
+        if curr_try <= retries:
             try:
                 return func(*args, **kwargs)
             except berserk.exceptions.ResponseError as re:
                 if re.status_code == 429:
                     # Recommended wait time for too many API requests is 1min
-                    print(f"Too many API requests! Waiting {i+1}min(s)...")
-                    self.root.after(60000 * (i + 1), func, args)
+                    print(f"Too many API requests! Waiting {curr_try}min(s)...")
+                    self.root.after(
+                        60000 * (curr_try),
+                        lambda: self.safe_api_call_tkinter(
+                            func,
+                            *args,
+                            retries=retries,
+                            delay=delay,
+                            curr_try=curr_try + 1,
+                            **kwargs,
+                        ),
+                    )
             except (
                 berserk.exceptions.ApiError,
                 berserk.exceptions.ResponseError,
                 ConnectionError,
             ) as e:
-                print(f"API call failed ({i+1}/{retries}): {e}")
-                self.root.after(delay * (i + 1))  # Increasing backoff
-        raise RuntimeError("API call failed after retries")
+                print(f"API call failed ({curr_try}/{retries}): {e}")
+                self.root.after(
+                    delay * (curr_try),
+                    lambda: self.safe_api_call_tkinter(
+                        func,
+                        *args,
+                        retries=retries,
+                        delay=delay,
+                        curr_try=curr_try + 1,
+                        **kwargs,
+                    ),
+                )  # Increasing backoff
+            except Exception as e:
+                print(f"API call failed: {e}")
+        else:
+            raise RuntimeError("API call failed after retries")
 
 
 def main():
