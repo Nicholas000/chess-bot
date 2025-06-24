@@ -15,6 +15,7 @@ import requests
 from dotenv import load_dotenv
 
 from src.chess_bot import ChessBot
+from src.ltr_model import LTRChessBotTrainer
 
 
 class ChessGUI:
@@ -34,12 +35,27 @@ class ChessGUI:
         # Info about active game
         self.active_game = False
         self.active_game_bot: ChessBot = None
+        self.bot_class = LTRChessBotTrainer  # Default to always increase dataset
+        self.root.bind("<Control-d>", self._ltr_model_switch)
 
         self.root_grid_layout()
 
         self.connect_to_lichess()
 
         self.root.mainloop()  # Run GUI
+
+    def _ltr_model_switch(self, event):
+        if self.active_game:
+            print("Cannot toggle bot type during game!")
+            return
+
+        # Toggle bot to use
+        if self.bot_class == ChessBot:
+            print("Toggling to LTR Trainer Bot!")
+            self.bot_class = LTRChessBotTrainer
+        elif self.bot_class == LTRChessBotTrainer:
+            print("Toggling to standard ChessBot!")
+            self.bot_class = ChessBot
 
     def _on_closing(self):
         """Function triggered when closing the application window.
@@ -297,7 +313,7 @@ class ChessGUI:
         webbrowser.open(url)
 
         # Create the chess bot (automatically starts on creation)
-        self.active_game_bot = ChessBot(response, self.client)
+        self.active_game_bot = self.bot_class(response, self.client)
         self.active_game = True
 
         # Create GUI elements and watchers to display the active game

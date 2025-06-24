@@ -3,3 +3,5 @@ python-chess
 pandas
 berserk
 requests
+lightgbm
+scikit-learn

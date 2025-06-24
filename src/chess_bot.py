@@ -5,6 +5,7 @@ Project: Lichess Chess Bot: Minimax with Alpha-Beta Pruning
 """
 
 import math
+import os
 import random
 import threading
 import time
@@ -14,7 +15,14 @@ from typing import Any, Dict
 import berserk
 import berserk.exceptions
 import chess
+import lightgbm
 import pandas as pd
+
+SEARCH_DEPTH = 5
+DATASET_FILE_PATH = f"src\data\LTR_trainer_dataset_depth={SEARCH_DEPTH}.csv"
+LTR_MODEL_FILE_PATH = f"src\LTR_model_depth={SEARCH_DEPTH}.txt"
+
+# TODO: Use counters to conduct an analysis of nodes checked in current model vs original model
 
 
 class ChessBot:
@@ -45,7 +53,7 @@ class ChessBot:
         )
         self.status = None
         self.status = "starting"
-        self.engine = MoveEngine(depth=4)
+        self.engine = MoveEngine(depth=SEARCH_DEPTH)
 
         # Initialize threads and thread communication objects
         self.move_made_event = threading.Event()
@@ -290,24 +298,32 @@ class ChessBot:
         return opponent_colors.get(player_color)
 
 
-# Weighted value of each chess piece
-PIECE_VALUES = {
-    chess.PAWN: 1,
-    chess.KNIGHT: 3,
-    chess.BISHOP: 3,
-    chess.ROOK: 5,
-    chess.QUEEN: 9,
-    chess.KING: 0,
-}
-
-
 # TODO: continue to test MoveEngine or add other advanced moves to its playlist
 class MoveEngine:
+    # Weighted value of each chess piece
+    PIECE_VALUES = {
+        chess.PAWN: 1,
+        chess.KNIGHT: 3,
+        chess.BISHOP: 3,
+        chess.ROOK: 5,
+        chess.QUEEN: 9,
+        chess.KING: 0,
+    }
+
     def __init__(self, depth=3):  # depth of minimax tree
+        from src.ltr_model import train_ltr_model
+
         self.depth = depth
         # store FEN strings of previous positions to penalize repeating moves
         self.seen_fens = set()
         self.player_color = None
+
+        # Generate LTR model from most recent data
+        if os.path.exists(DATASET_FILE_PATH):
+            train_ltr_model(DATASET_FILE_PATH, LTR_MODEL_FILE_PATH)
+            self.ltr_model = lightgbm.Booster(model_file=LTR_MODEL_FILE_PATH)
+        else:  # Backup model
+            self.ltr_model = lightgbm.Booster(model_file=r"src\LTR_model.txt")
 
     def evaluate_board(self, board: chess.Board) -> float:
         """assigns a value to the current board state. Positive is good for White, negative is good for Black."""
@@ -318,12 +334,12 @@ class MoveEngine:
 
         # material evaluation; sum up piece values for both sides
         score = sum(
-            PIECE_VALUES[piece_type]
+            self.PIECE_VALUES[piece_type]
             * (
                 len(board.pieces(piece_type, self.player_color))
                 - len(board.pieces(piece_type, not self.player_color))
             )
-            for piece_type in PIECE_VALUES
+            for piece_type in self.PIECE_VALUES
         )
 
         # mobility bonus to encourage more legal moves
@@ -348,11 +364,12 @@ class MoveEngine:
 
         # bonus for attacking undefended opponent pieces
         for square, piece in board.piece_map().items():
-            if board.is_attacked_by(piece.color, square):
-                if not board.is_attacked_by(
-                    not piece.color, square
-                ):  # same as not defended
-                    score += 0.3 * PIECE_VALUES[piece.piece_type]
+            if (
+                piece.color == (not self.player_color)
+                and board.is_attacked_by(not piece.color, square)
+                and not board.is_attacked_by(piece.color, square)
+            ):
+                score += 0.3 * self.PIECE_VALUES[piece.piece_type]
 
         return score
 
@@ -364,7 +381,7 @@ class MoveEngine:
         best_move = None
 
         # order moves to improve alpha-beta pruning efficiency
-        ordered_moves = self.order_moves(board)
+        ordered_moves = self.order_moves(board, self.depth)
 
         for move in ordered_moves:
             board.push(move)
@@ -394,20 +411,42 @@ class MoveEngine:
         print(f"Best move: {best_move}, Eval: {best_score:.2f}")
         return best_move if best_move else random.choice(list(board.legal_moves))
 
+    def move_score(self, board: chess.Board, move: chess.Move):
+        if board.is_capture(move):
+            captured = board.piece_at(move.to_square)
+            return self.PIECE_VALUES.get(captured.piece_type, 0) if captured else 0
+        if board.gives_check(move):
+            return 0.5
+        return 0
 
-    def order_moves(self, board: chess.Board):
+    def order_moves(self, board: chess.Board, depth: int):
         """returns moves sorted by heuristic: Highest priority is captures, then it does its checks and last makes a quiet move.
         This method improves speed for search performance"""
+        if (
+            depth >= self.depth
+        ):  # Only use LTR model at early depths. Otherwise it creates too much overhead
+            # Improved Learing to Rank move ordering
+            # Generate features for all moves
+            grouped_features = pd.concat(
+                [
+                    generate_features(board, move, self.player_color)
+                    for move in board.legal_moves
+                ],
+                ignore_index=True,
+            )
 
-        def move_score(move: chess.Move):
-            if board.is_capture(move):
-                captured = board.piece_at(move.to_square)
-                return PIECE_VALUES.get(captured.piece_type, 0) if captured else 0
-            if board.gives_check(move):
-                return 0.5
-            return 0
-
-        return sorted(board.legal_moves, key=move_score, reverse=True)
+            rankings = self.ltr_model.predict(data=grouped_features).argsort()[
+                ::-1
+            ]  # Get index ordering based on predicted ranking
+            legal_moves = list(board.legal_moves)
+            return [legal_moves[i] for i in rankings]  # Sort based on ranking
+        else:
+            # Original project move ordering
+            return sorted(
+                board.legal_moves,
+                key=lambda move: self.move_score(board, move),
+                reverse=True,
+            )
 
     def minimax(
         self,
@@ -423,7 +462,7 @@ class MoveEngine:
             return self.evaluate_board(board)
 
         # improve search efficiency by trying promising moves first
-        ordered_moves = self.order_moves(board)
+        ordered_moves = self.order_moves(board, depth)
         # acting as MAX: we want to maximize our bot,s utility
         if maximizing:
             for move in ordered_moves:
@@ -450,3 +489,94 @@ class MoveEngine:
                     return alpha
 
             return beta
+
+
+# Feature Generation Functions
+def generate_features(board: chess.Board, move: chess.Move, player_color):
+    piece_moved = board.piece_at(move.from_square).piece_type
+
+    board.push(move)  # Temporarily make move to evaluate board
+
+    # is_checkmate = board.is_checkmate()
+
+    # is_draw = board.is_stalemate() or board.is_insufficient_material()
+
+    material_eval = sum(
+        MoveEngine.PIECE_VALUES[piece_type]
+        * (
+            len(board.pieces(piece_type, player_color))
+            - len(board.pieces(piece_type, not player_color))
+        )
+        for piece_type in MoveEngine.PIECE_VALUES
+    )
+
+    mobility = board.legal_moves.count() * (-1 if (board.turn == player_color) else 1)
+
+    castling = (
+        board.has_kingside_castling_rights(player_color)
+        + board.has_queenside_castling_rights(player_color)
+        - board.has_kingside_castling_rights(not player_color)
+        - board.has_queenside_castling_rights(not player_color)
+    )
+
+    attack_undefended = sum(
+        [
+            MoveEngine.PIECE_VALUES[piece.piece_type]
+            for square, piece in board.piece_map().items()
+            if piece.color == (not player_color)  # Opponent pieces
+            and board.is_attacked_by(not piece.color, square)  # Attacked by us
+            and not board.is_attacked_by(
+                piece.color, square
+            )  # Not defended by opponent
+        ]
+    )
+
+    defended = sum(
+        [
+            MoveEngine.PIECE_VALUES[piece.piece_type]
+            for square, piece in board.piece_map().items()
+            if piece.color == player_color  # Our pieces
+            and board.is_attacked_by(piece.color, square)  # Defended by us
+        ]
+    )
+
+    # Get the distance moved towards the opponent side; indicates piece development
+    from_rank = chess.square_rank(move.from_square)
+    to_rank = chess.square_rank(move.to_square)
+    if player_color == chess.WHITE:
+        move_dist = to_rank - from_rank
+    else:
+        move_dist = from_rank - to_rank
+
+    # Calculate control over center squares; inidicated piece development
+    CENTER_SQUARES = [chess.D4, chess.E4, chess.D5, chess.E5]
+    center_control = 0
+    for square in CENTER_SQUARES:
+        if board.is_attacked_by(player_color, square):
+            center_control += 1
+        if board.is_attacked_by(not player_color, square):
+            center_control += 1
+
+    move_clock = board.fullmove_number
+
+    # Add data to the dataframe
+    features = pd.DataFrame(
+        data=[
+            {
+                "piece_moved": piece_moved,
+                # "is_checkmate": is_checkmate,
+                # "is_draw": is_draw,
+                "material_eval": material_eval,
+                "mobility": mobility,
+                "castling": castling,
+                "attack_undefended": attack_undefended,
+                "defended": defended,
+                "move_dist": move_dist,
+                "center_control": center_control,
+                "move_clock": move_clock,
+            }
+        ]
+    )
+    board.pop()  # Revert move to get board back to original state
+
+    return features
