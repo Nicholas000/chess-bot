@@ -19,8 +19,10 @@ import lightgbm
 import pandas as pd
 
 SEARCH_DEPTH = 5
-DATASET_FILE_PATH = f"src\data\LTR_trainer_dataset_depth={SEARCH_DEPTH}.csv"
-LTR_MODEL_FILE_PATH = f"src\LTR_model_depth={SEARCH_DEPTH}.txt"
+DATASET_FILE_PATH = os.path.join(
+    "src", "data", f"LTR_trainer_dataset_depth={SEARCH_DEPTH}.csv"
+)
+LTR_MODEL_FILE_PATH = os.path.join("src", f"LTR_model_depth={SEARCH_DEPTH}.txt")
 
 # TODO: Use counters to conduct an analysis of nodes checked in current model vs original model
 
@@ -36,15 +38,16 @@ class ChessBot:
         self.player_color = None
         self.client = client
 
-        # Must check all API calls for rate limiting and retry
-        while True:
-            try:
-                self.bot_id = self.client.account.get()["id"]
-                break
-            except berserk.exceptions.ResponseError as re:
-                if re.status_code == 429:
-                    print("Too many API requests! Waiting 1min...")
-                    time.sleep(60)
+        # # Must check all API calls for rate limiting and retry
+        # while True:
+        #     try:
+        #         self.bot_id = self.client.account.get()["id"]
+        #         break
+        #     except berserk.exceptions.ResponseError as re:
+        #         if re.status_code == 429:
+        #             print("Too many API requests! Waiting 1min...")
+        #             time.sleep(60)
+        self.bot_id = safe_api_call(self.client.account.get)["id"]
 
         # Keep an internal representation of the board
         self.board = chess.Board(fen=self.fen)
@@ -76,15 +79,16 @@ class ChessBot:
         self.best_move_thread.join()
         self.move_thread.join()
 
-        # Resign the game since we are canceling prematurely
-        while True:
-            try:
-                self.client.bots.resign_game(self.id)
-                break
-            except berserk.exceptions.ResponseError as re:
-                if re.status_code == 429:
-                    print("Too many API requests! Waiting 1min...")
-                    time.sleep(60)
+        # # Resign the game since we are canceling prematurely
+        # while True:
+        #     try:
+        #         self.client.bots.resign_game(self.id)
+        #         break
+        #     except berserk.exceptions.ResponseError as re:
+        #         if re.status_code == 429:
+        #             print("Too many API requests! Waiting 1min...")
+        #             time.sleep(60)
+        safe_api_call(self.client.bots.resign_game, self.id)
 
         self.game_stream_thread.join()
         print("Game closed!")
@@ -114,16 +118,17 @@ class ChessBot:
             # Get the best move from the evaluation thread; blocks until a move is provided
             best_move = self.best_move_message_queue.get(block=True)
 
-            # Make a move
-            while True:
-                try:
-                    self.client.bots.make_move(self.id, best_move)
-                    break
-                except berserk.exceptions.ResponseError as re:
-                    print(re)
-                    if re.status_code == 429:
-                        print("Too many API requests! Waiting 1min...")
-                        time.sleep(60)
+            # # Make a move
+            # while True:
+            #     try:
+            #         self.client.bots.make_move(self.id, best_move)
+            #         break
+            #     except berserk.exceptions.ResponseError as re:
+            #         print(re)
+            #         if re.status_code == 429:
+            #             print("Too many API requests! Waiting 1min...")
+            #             time.sleep(60)
+            safe_api_call(self.client.bots.make_move, *(self.id, best_move))
 
             self.move_made_event.clear()  # Clear to wait again until thread watching for opponent moves resets it
 
@@ -177,17 +182,20 @@ class ChessBot:
                 return
             fen = self.board.fen()
 
-            # Get info for popular database moves from the current position
-            while True:
-                try:
-                    opening_statistics = self.client.opening_explorer.get_masters_games(
-                        position=fen
-                    )
-                    break
-                except berserk.exceptions.ResponseError as re:
-                    if re.status_code == 429:
-                        print("Too many API requests! Waiting 1min...")
-                        time.sleep(60)
+            # # Get info for popular database moves from the current position
+            # while True:
+            #     try:
+            #         opening_statistics = self.client.opening_explorer.get_masters_games(
+            #             position=fen
+            #         )
+            #         break
+            #     except berserk.exceptions.ResponseError as re:
+            #         if re.status_code == 429:
+            #             print("Too many API requests! Waiting 1min...")
+            #             time.sleep(60)
+            opening_statistics = safe_api_call(
+                self.client.opening_explorer.get_masters_games, **{"position": fen}
+            )
 
             # Feature extraction from data
             top_moves_data = pd.DataFrame(data=opening_statistics["moves"])
@@ -223,14 +231,15 @@ class ChessBot:
         print(f"Streaming game state on thread {self.game_stream_thread.getName()}")
 
         # Get game stream as a continuous iterator
-        while True:
-            try:
-                game_state_response = self.client.bots.stream_game_state(self.id)
-                break
-            except berserk.exceptions.ResponseError as re:
-                if re.status_code == 429:
-                    print("Too many API requests! Waiting 1min...")
-                    time.sleep(60)
+        # while True:
+        #     try:
+        #         game_state_response = self.client.bots.stream_game_state(self.id)
+        #         break
+        #     except berserk.exceptions.ResponseError as re:
+        #         if re.status_code == 429:
+        #             print("Too many API requests! Waiting 1min...")
+        #             time.sleep(60)
+        game_state_response = safe_api_call(self.client.bots.stream_game_state, self.id)
 
         # Check type of response from game stream and react accordingly; loop blocks until a new state is provided
         for event in game_state_response:
@@ -311,7 +320,7 @@ class MoveEngine:
     }
 
     def __init__(self, depth=3):  # depth of minimax tree
-        from src.ltr_model import train_ltr_model
+        from src.ltr_model import feature_analysis, train_ltr_model
 
         self.depth = depth
         # store FEN strings of previous positions to penalize repeating moves
@@ -321,9 +330,12 @@ class MoveEngine:
         # Generate LTR model from most recent data
         if os.path.exists(DATASET_FILE_PATH):
             train_ltr_model(DATASET_FILE_PATH, LTR_MODEL_FILE_PATH)
-            self.ltr_model = lightgbm.Booster(model_file=LTR_MODEL_FILE_PATH)
+            model_path = LTR_MODEL_FILE_PATH
         else:  # Backup model
-            self.ltr_model = lightgbm.Booster(model_file=r"src\LTR_model.txt")
+            model_path = r"src\LTR_model.txt"
+
+        self.ltr_model = lightgbm.Booster(model_file=model_path)
+        feature_analysis(model_path)
 
     def evaluate_board(self, board: chess.Board) -> float:
         """assigns a value to the current board state. Positive is good for White, negative is good for Black."""
@@ -580,3 +592,31 @@ def generate_features(board: chess.Board, move: chess.Move, player_color):
     board.pop()  # Revert move to get board back to original state
 
     return features
+
+
+def safe_api_call(func, *args, retries=3, delay=2, **kwargs):
+    """Wrapper for Berserk API calls to handle API errors.
+
+    Params:
+        func (func): the berserk API function to call
+        *args (tuple): the args to pass to the function
+        retries (int): the number of times to retry the call on error
+        delay (int): the number of seconds to delay between calls. Increases on retries
+        **kwargs (dict): the kwargs to pass to the function
+    """
+    for i in range(retries):
+        try:
+            return func(*args, **kwargs)
+        except berserk.exceptions.ResponseError as re:
+            if re.status_code == 429:
+                # Recommended wait time for too many API requests is 1min
+                print(f"Too many API requests! Waiting {i+1}min(s)...")
+                time.sleep(60 * (i + 1))
+        except (
+            berserk.exceptions.ApiError,
+            berserk.exceptions.ResponseError,
+            ConnectionError,
+        ) as e:
+            print(f"API call failed ({i+1}/{retries}): {e}")
+            time.sleep(delay * (i + 1))  # Increasing backoff
+    raise RuntimeError("API call failed after retries")

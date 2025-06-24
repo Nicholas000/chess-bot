@@ -289,7 +289,7 @@ class ChessGUI:
 
     def create_ai(self):
         """Wrapper for the Lichess API call. Waits to create a game if encountering API rate limiting."""
-        args = {
+        kwargs = {
             "level": self.ai_difficulty.get(),
             "clock_limit": 3600,
             "clock_increment": 30,
@@ -297,13 +297,17 @@ class ChessGUI:
             "color": self.player_color.get(),
         }
 
-        try:
-            response = self.client.challenges.create_ai(**args)
-            self.on_ai_created(response, args)
-        except berserk.exceptions.ResponseError as re:
-            if re.status_code == 429:
-                print("Too many API requests! Waiting 1min...")
-                self.root.after(60000, self.create_ai, args=args)
+        # try:
+        #     response = self.client.challenges.create_ai(**args)
+        #     self.on_ai_created(response, args)
+        # except berserk.exceptions.ResponseError as re:
+        #     if re.status_code == 429:
+        #         print("Too many API requests! Waiting 1min...")
+        #         self.root.after(60000, self.create_ai, args=args)
+        response = self.safe_api_call_tkinter(
+            self.client.challenges.create_ai, **kwargs
+        )
+        self.on_ai_created(response, kwargs)
 
     def on_ai_created(self, response, args):
         """Upon succesful ai game creation, starts our chess bot and related GUI activities"""
@@ -319,6 +323,34 @@ class ChessGUI:
         # Create GUI elements and watchers to display the active game
         self.create_game_info_frame(url, args["level"], args["color"])
         self.start_watchers()
+
+    def safe_api_call_tkinter(self, func, *args, retries=3, delay=2000, **kwargs):
+        """Wrapper for Berserk API calls to handle API errors.
+        Cannot use the standard safe_api_call since calling time.sleep on the GUI will disrupt all user inputs as well
+
+        Params:
+            func (func): the berserk API function to call
+            *args (tuple): the args to pass to the function
+            retries (int): the number of times to retry the call on error
+            delay (int): the number of milliseconds to delay between calls. Increases on retries
+            **kwargs (dict): the kwargs to pass to the function
+        """
+        for i in range(retries):
+            try:
+                return func(*args, **kwargs)
+            except berserk.exceptions.ResponseError as re:
+                if re.status_code == 429:
+                    # Recommended wait time for too many API requests is 1min
+                    print(f"Too many API requests! Waiting {i+1}min(s)...")
+                    self.root.after(60000 * (i + 1), func, args)
+            except (
+                berserk.exceptions.ApiError,
+                berserk.exceptions.ResponseError,
+                ConnectionError,
+            ) as e:
+                print(f"API call failed ({i+1}/{retries}): {e}")
+                self.root.after(delay * (i + 1))  # Increasing backoff
+        raise RuntimeError("API call failed after retries")
 
 
 def main():
