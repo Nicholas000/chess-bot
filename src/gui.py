@@ -297,13 +297,6 @@ class ChessGUI:
             "color": self.player_color.get(),
         }
 
-        # try:
-        #     response = self.client.challenges.create_ai(**args)
-        #     self.on_ai_created(response, args)
-        # except berserk.exceptions.ResponseError as re:
-        #     if re.status_code == 429:
-        #         print("Too many API requests! Waiting 1min...")
-        #         self.root.after(60000, self.create_ai, args=args)
         response = self.safe_api_call_tkinter(
             self.client.challenges.create_ai, **kwargs
         )

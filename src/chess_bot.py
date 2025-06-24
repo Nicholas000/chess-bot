@@ -38,15 +38,7 @@ class ChessBot:
         self.player_color = None
         self.client = client
 
-        # # Must check all API calls for rate limiting and retry
-        # while True:
-        #     try:
-        #         self.bot_id = self.client.account.get()["id"]
-        #         break
-        #     except berserk.exceptions.ResponseError as re:
-        #         if re.status_code == 429:
-        #             print("Too many API requests! Waiting 1min...")
-        #             time.sleep(60)
+        # Get ID of our bot
         self.bot_id = safe_api_call(self.client.account.get)["id"]
 
         # Keep an internal representation of the board
@@ -79,15 +71,7 @@ class ChessBot:
         self.best_move_thread.join()
         self.move_thread.join()
 
-        # # Resign the game since we are canceling prematurely
-        # while True:
-        #     try:
-        #         self.client.bots.resign_game(self.id)
-        #         break
-        #     except berserk.exceptions.ResponseError as re:
-        #         if re.status_code == 429:
-        #             print("Too many API requests! Waiting 1min...")
-        #             time.sleep(60)
+        # Resign the game since we are canceling prematurely
         safe_api_call(self.client.bots.resign_game, self.id)
 
         self.game_stream_thread.join()
@@ -118,16 +102,7 @@ class ChessBot:
             # Get the best move from the evaluation thread; blocks until a move is provided
             best_move = self.best_move_message_queue.get(block=True)
 
-            # # Make a move
-            # while True:
-            #     try:
-            #         self.client.bots.make_move(self.id, best_move)
-            #         break
-            #     except berserk.exceptions.ResponseError as re:
-            #         print(re)
-            #         if re.status_code == 429:
-            #             print("Too many API requests! Waiting 1min...")
-            #             time.sleep(60)
+            # Make a move
             safe_api_call(self.client.bots.make_move, *(self.id, best_move))
 
             self.move_made_event.clear()  # Clear to wait again until thread watching for opponent moves resets it
@@ -182,17 +157,7 @@ class ChessBot:
                 return
             fen = self.board.fen()
 
-            # # Get info for popular database moves from the current position
-            # while True:
-            #     try:
-            #         opening_statistics = self.client.opening_explorer.get_masters_games(
-            #             position=fen
-            #         )
-            #         break
-            #     except berserk.exceptions.ResponseError as re:
-            #         if re.status_code == 429:
-            #             print("Too many API requests! Waiting 1min...")
-            #             time.sleep(60)
+            # Get info for popular database moves from the current position
             opening_statistics = safe_api_call(
                 self.client.opening_explorer.get_masters_games, **{"position": fen}
             )
@@ -231,14 +196,6 @@ class ChessBot:
         print(f"Streaming game state on thread {self.game_stream_thread.getName()}")
 
         # Get game stream as a continuous iterator
-        # while True:
-        #     try:
-        #         game_state_response = self.client.bots.stream_game_state(self.id)
-        #         break
-        #     except berserk.exceptions.ResponseError as re:
-        #         if re.status_code == 429:
-        #             print("Too many API requests! Waiting 1min...")
-        #             time.sleep(60)
         game_state_response = safe_api_call(self.client.bots.stream_game_state, self.id)
 
         # Check type of response from game stream and react accordingly; loop blocks until a new state is provided
