@@ -7,7 +7,7 @@ import lightgbm
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-from src.chess_bot import ChessBot, generate_features
+from src.chess_bot import DATASET_FILE_PATH, ChessBot, generate_features
 
 
 def train_ltr_model(data_load_path: str, model_save_path: str):
@@ -45,14 +45,14 @@ def train_ltr_model(data_load_path: str, model_save_path: str):
         "objective": "lambdarank",
         "metric": "ndcg",  # Normalized Discounted Cumulative Gain
         "boosting_type": "gbdt",  # Gradient Boosted Decision Tree
-        "learning_rate": 0.05,
+        "learning_rate": 0.02,
         "num_leaves": 16,
-        "min_data_in_leaf": 16,
-        "lambda_l2": 1.0,  # L2 regularization
+        "min_data_in_leaf": 32,
+        "lambda_l2": 10.0,  # L2 regularization
         "verbose": 1,
     }
 
-    model = lightgbm.train(params, dataset, num_boost_round=100)
+    model = lightgbm.train(params, dataset, num_boost_round=200)
 
     model.save_model(model_save_path)
 
@@ -64,13 +64,12 @@ class LTRChessBotTrainer(ChessBot):
     def adversarial_search(self):
         """Overrides parent method to add saving of moves"""
         # Set up a path to save data to for later analysis
-        save_path = os.path.abspath(r"src\data\LTR_trainer_dataset_depth=5.csv")
-        print("Saving data at:", save_path)
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        print("Saving data at:", DATASET_FILE_PATH)
+        os.makedirs(os.path.dirname(DATASET_FILE_PATH), exist_ok=True)
 
         # Get the last group id from previous recordings
         try:
-            temp_df = pd.read_csv(save_path)
+            temp_df = pd.read_csv(DATASET_FILE_PATH)
             group_id = temp_df["group_id"].max()
         except:
             group_id = 0  # or None, depending on your needs
@@ -80,7 +79,10 @@ class LTRChessBotTrainer(ChessBot):
             if not self.wait_for_move_event():
                 return
 
+            print("Evaluating with default engine!")
             best_move = self.engine.get_best_move(self.board)  # Find the best move
+            print("Evaluating with LTR engine!")
+            best_move = self.ltr_engine.get_best_move(self.board)  # Find the best move
 
             group_id += 1
             for move in list(self.board.legal_moves):
@@ -96,9 +98,9 @@ class LTRChessBotTrainer(ChessBot):
 
                 # Save move data to dataset for later analysis
                 data_entry.to_csv(
-                    save_path,
+                    DATASET_FILE_PATH,
                     mode="a",
-                    header=not os.path.exists(save_path),
+                    header=not os.path.exists(DATASET_FILE_PATH),
                     index=False,
                 )
 
@@ -110,27 +112,6 @@ def main():
     data_load_path = r"src\data\LTR_trainer_dataset.csv"
     model_save_path = r"src\LTR_model.txt"
     train_ltr_model(data_load_path, model_save_path)
-
-
-# def main2():
-#     data_load_path = r"src\data\LTR_trainer_dataset.csv"
-#     data = pd.read_csv(data_load_path)
-
-#     # Convert piece type character to int using decoder
-#     PIECE_SYMBOL_TO_TYPE = {
-#         "P": 1,
-#         "N": 2,
-#         "B": 3,
-#         "R": 4,
-#         "Q": 5,
-#         "K": 6,
-#         None: 0,
-#     }
-
-#     data["piece_moved"] = data["piece_moved"].apply(
-#         lambda x: PIECE_SYMBOL_TO_TYPE.get(str(x).upper(), 0)
-#     )
-#     data.to_csv(data_load_path, index=False)
 
 
 def feature_analysis(model_save_path):

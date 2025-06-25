@@ -292,7 +292,7 @@ class ChessGUI:
         kwargs = {
             "level": self.ai_difficulty.get(),
             "clock_limit": 3600,
-            "clock_increment": 30,
+            "clock_increment": 60,
             "variant": "standard",
             "color": self.player_color.get(),
         }

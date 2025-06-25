@@ -20,9 +20,9 @@ import pandas as pd
 
 SEARCH_DEPTH = 5
 DATASET_FILE_PATH = os.path.join(
-    "src", "data", f"LTR_trainer_dataset_depth={SEARCH_DEPTH}.csv"
+    "src", "data", f"LTR_trainer_dataset_v2_depth={SEARCH_DEPTH}.csv"
 )
-LTR_MODEL_FILE_PATH = os.path.join("src", f"LTR_model_depth={SEARCH_DEPTH}.txt")
+LTR_MODEL_FILE_PATH = os.path.join("src", f"LTR_model_v2_depth={SEARCH_DEPTH}.txt")
 
 # TODO: Use counters to conduct an analysis of nodes checked in current model vs original model
 
@@ -37,6 +37,7 @@ class ChessBot:
         self.fen = response["fen"]
         self.player_color = None
         self.client = client
+        self.num_moves_made = 0
 
         # Get ID of our bot
         self.bot_id = safe_api_call(self.client.account.get)["id"]
@@ -48,7 +49,8 @@ class ChessBot:
         )
         self.status = None
         self.status = "starting"
-        self.engine = MoveEngineWithLTRMoveOrdering(depth=SEARCH_DEPTH)
+        self.engine = MoveEngine(depth=SEARCH_DEPTH)
+        self.ltr_engine = MoveEngineWithLTRMoveOrdering(depth=SEARCH_DEPTH)
 
         # Initialize threads and thread communication objects
         self.move_made_event = threading.Event()
@@ -104,6 +106,7 @@ class ChessBot:
 
             # Make a move
             safe_api_call(self.client.bots.make_move, *(self.id, best_move))
+            self.num_moves_made += 1  # Count moves made
 
             self.move_made_event.clear()  # Clear to wait again until thread watching for opponent moves resets it
 
@@ -145,7 +148,10 @@ class ChessBot:
             # Wait for opponent's move
             if not self.wait_for_move_event():
                 return
+            print("Evaluating with default engine!")
             best_move = self.engine.get_best_move(self.board)  # Call to engine
+            print("Evaluating with LTR engine!")
+            best_move = self.ltr_engine.get_best_move(self.board)  # Call to engine
             self.best_move_message_queue.put(best_move.uci())  # Convert move to string
             self.move_made_event.clear()
 
@@ -235,6 +241,13 @@ class ChessBot:
                             else:
                                 print("You lost!")
                                 self.status = "loss"
+
+                            print(
+                                f"Average Nodes Searched with Simple Move Ordering: {self.engine.num_nodes_searched/self.num_moves_made}"
+                            )
+                            print(
+                                f"Average Nodes Searched with LTR Move Ordering: {self.ltr_engine.num_nodes_searched/self.num_moves_made}"
+                            )
                             return
 
                 case "gameFull":
@@ -247,9 +260,11 @@ class ChessBot:
                             if self.bot_id == event["white"].get("id", None):
                                 self.player_color = "white"
                                 self.engine.player_color = chess.WHITE
+                                self.ltr_engine.player_color = chess.WHITE
                             elif self.bot_id == event["black"].get("id", None):
                                 self.player_color = "black"
                                 self.engine.player_color = chess.BLACK
+                                self.ltr_engine.player_color = chess.BLACK
                             else:
                                 raise Exception("Unable to determine bot color!")
 
@@ -281,6 +296,7 @@ class MoveEngine:
         # store FEN strings of previous positions to penalize repeating moves
         self.seen_fens = set()
         self.player_color = None
+        self.num_nodes_searched = 0
 
     def evaluate_board(self, board: chess.Board) -> float:
         """assigns a value to the current board state. Positive is good for White, negative is good for Black."""
@@ -351,6 +367,7 @@ class MoveEngine:
                 board, self.depth - 1, alpha_beta[0], alpha_beta[1], not maximizing
             )
             board.pop()
+            self.num_nodes_searched += 1  # Count as node searched
 
             # chooses the best move based on score value
             if (maximizing and alpha_beta[not maximizing] > best_score) or (
@@ -395,6 +412,8 @@ class MoveEngine:
         maximizing: bool,
     ) -> float:
         """minimax with alpha-beta pruning. Tries to maximize score for white and minimize for black"""
+        self.num_nodes_searched += 1  # Count as node searched
+
         # Detect leaf nodes if at max depth
         if depth == 0 or board.is_game_over():
             return self.evaluate_board(board)
@@ -480,20 +499,77 @@ class MoveEngineWithLTRMoveOrdering(MoveEngine):
 def generate_features(board: chess.Board, move: chess.Move, player_color):
     piece_moved = board.piece_at(move.from_square).piece_type
 
+    material_eval = (
+        MoveEngine.PIECE_VALUES.get(board.piece_at(move.to_square).piece_type, 0)
+        if board.is_capture(move)
+        else 0
+    )
+
+    is_check = board.gives_check(move)
+
+    # Most valuable victim - least valuable attacker (prioritize capturing high value pieces with low value pieces)
+    mvv_lva = (
+        MoveEngine.PIECE_VALUES.get(board.piece_at(move.to_square).piece_type, 0)
+        - MoveEngine.PIECE_VALUES.get(board.piece_at(move.from_square).piece_type, 0)
+        if board.is_capture(move)
+        else 0
+    )
+
+    # Check for attacks on opponent pieces before
+    attacks_before = {
+        target_square
+        for square, piece in board.piece_map().items()
+        if piece.color == player_color
+        for target_square in board.attacks(square)
+        if board.piece_at(target_square)
+        and board.piece_at(target_square).color != player_color
+    }
+    num_attacks_before = len(attacks_before)
+    value_attacks_before = sum(
+        [
+            MoveEngine.PIECE_VALUES.get(board.piece_at(square).piece_type, 0)
+            for square in attacks_before
+        ]
+    )
+
     board.push(move)  # Temporarily make move to evaluate board
+
+    # Check for attacks on opponent pieces before
+    attacks_after = {
+        target_square
+        for square, piece in board.piece_map().items()
+        if piece.color == player_color
+        for target_square in board.attacks(square)
+        if board.piece_at(target_square)
+        and board.piece_at(target_square).color != player_color
+    }
+    num_attacks_after = len(attacks_after)
+    value_attacks_after = sum(
+        [
+            MoveEngine.PIECE_VALUES.get(board.piece_at(square).piece_type, 0)
+            for square in attacks_after
+        ]
+    )
+
+    # Get the number of new attacks
+    num_new_attacks = num_attacks_after - num_attacks_before
+
+    # Get the value of new attacks
+    value_new_attacks = value_attacks_after - value_attacks_before
 
     # is_checkmate = board.is_checkmate()
 
     # is_draw = board.is_stalemate() or board.is_insufficient_material()
 
-    material_eval = sum(
-        MoveEngine.PIECE_VALUES[piece_type]
-        * (
-            len(board.pieces(piece_type, player_color))
-            - len(board.pieces(piece_type, not player_color))
-        )
-        for piece_type in MoveEngine.PIECE_VALUES
-    )
+    # Evaluate opponents board material vs our material
+    # material_eval = sum(
+    #     MoveEngine.PIECE_VALUES[piece_type]
+    #     * (
+    #         len(board.pieces(piece_type, player_color))
+    #         - len(board.pieces(piece_type, not player_color))
+    #     )
+    #     for piece_type in MoveEngine.PIECE_VALUES
+    # )
 
     mobility = board.legal_moves.count() * (-1 if (board.turn == player_color) else 1)
 
@@ -549,6 +625,10 @@ def generate_features(board: chess.Board, move: chess.Move, player_color):
         data=[
             {
                 "piece_moved": piece_moved,
+                "is_check": is_check,
+                "mvv_lva": mvv_lva,
+                "num_new_attacks": num_new_attacks,
+                "value_new_attacks": value_new_attacks,
                 # "is_checkmate": is_checkmate,
                 # "is_draw": is_draw,
                 "material_eval": material_eval,
