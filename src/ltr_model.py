@@ -1,6 +1,9 @@
-# Learning to Rank model for move ordering
+"""
+Authors: Nicholas Learman
+Course: CS 481: Artificial Intelligence, Spring 2025
+Honors Project: Learn to Rank Move Ordering for Early Pruning
+"""
 
-# import tensorflow
 import os
 
 import lightgbm
@@ -11,22 +14,23 @@ from src.chess_bot import DATASET_FILE_PATH, ChessBot, generate_features
 
 
 def train_ltr_model(data_load_path: str, model_save_path: str):
+    """Train a LambdaRank model on a given dataset"""
     # Preprocess the dataset
     data = pd.read_csv(data_load_path)
 
     # Normalize features to hold same relative weight in decision making
     features = data.drop(columns=["group_id", "move", "is_best_move"])
-    features.drop(
-        columns=[
-            "is_checkmate",
-            "is_draw",
-            # "castling",
-            # "attack_undefended",
-            # "center_control",
-        ],
-        inplace=True,
-        errors="ignore",
-    )  # Drop columns with less significant model importance
+    # features.drop(
+    #     columns=[
+    #         "is_checkmate",
+    #         "is_draw",
+    #         # "castling",
+    #         # "attack_undefended",
+    #         # "center_control",
+    #     ],
+    #     inplace=True,
+    #     errors="ignore",
+    # )  # Drop columns with less significant model importance
 
     scaler = StandardScaler()
     normalized_features = pd.DataFrame(
@@ -58,6 +62,8 @@ def train_ltr_model(data_load_path: str, model_save_path: str):
 
 
 class LTRChessBotTrainer(ChessBot):
+    """Wrapper class for ChessBot that saves move data to CSV so that it can be used for LTR model training."""
+
     def __init__(self, response, client):
         super().__init__(response, client)
 
@@ -108,21 +114,11 @@ class LTRChessBotTrainer(ChessBot):
             self.move_made_event.clear()
 
 
-def main():
-    data_load_path = r"src\data\LTR_trainer_dataset.csv"
-    model_save_path = r"src\LTR_model.txt"
-    train_ltr_model(data_load_path, model_save_path)
-
-
 def feature_analysis(model_save_path):
+    """Output the feature weights for each feature used by the model"""
     model = lightgbm.Booster(model_file=model_save_path)
     importances = [float(i) for i in model.feature_importance(importance_type="gain")]
     feature_names = model.feature_name()
 
     feature_weights = pd.Series(dict(zip(feature_names, importances))).sort_values()
     print(feature_weights)
-
-
-if __name__ == "__main__":
-    main()
-    feature_analysis()

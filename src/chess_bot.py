@@ -24,8 +24,6 @@ DATASET_FILE_PATH = os.path.join(
 )
 LTR_MODEL_FILE_PATH = os.path.join("src", f"LTR_model_v2_depth={SEARCH_DEPTH}.txt")
 
-# TODO: Use counters to conduct an analysis of nodes checked in current model vs original model
-
 
 class ChessBot:
     """Class to run our minimax with alpha-beta pruning chess bot on the Lichess API"""
@@ -487,7 +485,7 @@ class MoveEngineWithLTRMoveOrdering(MoveEngine):
             legal_moves = list(board.legal_moves)
             return [legal_moves[i] for i in rankings]  # Sort based on ranking
         else:
-            # Original project move ordering
+            # Simple heuristic move ordering at lower depths
             return sorted(
                 board.legal_moves,
                 key=lambda move: self.move_score(board, move),
@@ -495,16 +493,21 @@ class MoveEngineWithLTRMoveOrdering(MoveEngine):
             )
 
 
-# Feature Generation Functions
+""" ------------------------ Feature Generation Functions ------------------------ """
+
+
 def generate_features(board: chess.Board, move: chess.Move, player_color):
+    # The type of piece moved; saved as an int for model processing
     piece_moved = board.piece_at(move.from_square).piece_type
 
+    # The value of a captured piece if any
     material_eval = (
         MoveEngine.PIECE_VALUES.get(board.piece_at(move.to_square).piece_type, 0)
         if board.is_capture(move)
         else 0
     )
 
+    # Whether or not the move gives a check
     is_check = board.gives_check(move)
 
     # Most valuable victim - least valuable attacker (prioritize capturing high value pieces with low value pieces)
@@ -515,7 +518,7 @@ def generate_features(board: chess.Board, move: chess.Move, player_color):
         else 0
     )
 
-    # Check for attacks on opponent pieces before
+    # Check for attacks on opponent pieces before move
     attacks_before = {
         target_square
         for square, piece in board.piece_map().items()
@@ -524,13 +527,13 @@ def generate_features(board: chess.Board, move: chess.Move, player_color):
         if board.piece_at(target_square)
         and board.piece_at(target_square).color != player_color
     }
-    num_attacks_before = len(attacks_before)
+    num_attacks_before = len(attacks_before)  # Number of attacks before move
     value_attacks_before = sum(
         [
             MoveEngine.PIECE_VALUES.get(board.piece_at(square).piece_type, 0)
             for square in attacks_before
         ]
-    )
+    )  # Weighted value of attacked pieces before move
 
     board.push(move)  # Temporarily make move to evaluate board
 
@@ -543,22 +546,24 @@ def generate_features(board: chess.Board, move: chess.Move, player_color):
         if board.piece_at(target_square)
         and board.piece_at(target_square).color != player_color
     }
-    num_attacks_after = len(attacks_after)
+    num_attacks_after = len(attacks_after)  # Number of attacks after move
     value_attacks_after = sum(
         [
             MoveEngine.PIECE_VALUES.get(board.piece_at(square).piece_type, 0)
             for square in attacks_after
         ]
-    )
+    )  # Weighted value of attacked pieces after move
 
     # Get the number of new attacks
     num_new_attacks = num_attacks_after - num_attacks_before
 
-    # Get the value of new attacks
+    # Get the weighted value of new attacks
     value_new_attacks = value_attacks_after - value_attacks_before
 
+    # Whether or not the move leads to checkmate
     # is_checkmate = board.is_checkmate()
 
+    # Whether or not the move leads to a draw
     # is_draw = board.is_stalemate() or board.is_insufficient_material()
 
     # Evaluate opponents board material vs our material
@@ -571,8 +576,10 @@ def generate_features(board: chess.Board, move: chess.Move, player_color):
     #     for piece_type in MoveEngine.PIECE_VALUES
     # )
 
+    # The number of available moves
     mobility = board.legal_moves.count() * (-1 if (board.turn == player_color) else 1)
 
+    # Whether or not each side retains its castling rights; related to king safety
     castling = (
         board.has_kingside_castling_rights(player_color)
         + board.has_queenside_castling_rights(player_color)
@@ -580,6 +587,7 @@ def generate_features(board: chess.Board, move: chess.Move, player_color):
         - board.has_queenside_castling_rights(not player_color)
     )
 
+    # The sum of weighted piece values for attacks on undefended opponent pieces
     attack_undefended = sum(
         [
             MoveEngine.PIECE_VALUES[piece.piece_type]
@@ -592,6 +600,7 @@ def generate_features(board: chess.Board, move: chess.Move, player_color):
         ]
     )
 
+    # The sum of weighted piece values for pieces that we defend
     defended = sum(
         [
             MoveEngine.PIECE_VALUES[piece.piece_type]
@@ -609,7 +618,7 @@ def generate_features(board: chess.Board, move: chess.Move, player_color):
     else:
         move_dist = from_rank - to_rank
 
-    # Calculate control over center squares; inidicated piece development
+    # Calculate control over center squares; inidicates piece development
     CENTER_SQUARES = [chess.D4, chess.E4, chess.D5, chess.E5]
     center_control = 0
     for square in CENTER_SQUARES:
@@ -618,6 +627,7 @@ def generate_features(board: chess.Board, move: chess.Move, player_color):
         if board.is_attacked_by(not player_color, square):
             center_control += 1
 
+    # The number of moves made in the game so far; will be the same per group but may combine with other features to be relevant
     move_clock = board.fullmove_number
 
     # Add data to the dataframe
