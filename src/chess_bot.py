@@ -503,8 +503,12 @@ def generate_features(board: chess.Board, move: chess.Move, player_color):
     # The value of a captured piece if any
     material_eval = (
         MoveEngine.PIECE_VALUES.get(board.piece_at(move.to_square).piece_type, 0)
-        if board.is_capture(move)
-        else 0
+        if board.is_capture(move) and board.piece_at(move.to_square)
+        else (  # Special check for en passant capture
+            MoveEngine.PIECE_VALUES.get(chess.PAWN, 0)
+            if board.is_en_passant(move)
+            else 0
+        )
     )
 
     # Whether or not the move gives a check
